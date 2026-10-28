@@ -24,7 +24,7 @@ npx expo start       # then open the dev build and scan the QR code
 npx expo run:ios     # or: npx expo run:android
 ```
 
-Checks: `npm test` (160 tests, 20 suites) · `npx tsc --noEmit` · `npx eslint .` ·
+Checks: `npm test` (169 tests, 20 suites) · `npx tsc --noEmit` · `npx eslint .` ·
 `npx expo-doctor` · `npx expo export --platform android --platform ios` ·
 `node --check server/vision-server.mjs`.
 
@@ -120,8 +120,14 @@ Live guided-build flow (`src/app/project.tsx` +
   server ffmpeg) with an in-app slideshow fallback.
 - **3D step preview** — each step card shows a rotatable three.js model
   built from the parsed parts list (legs, panels, screws as primitives;
-  current step highlighted, future steps ghosted). Drag to rotate. Models
-  are schematic stagings, not measured assemblies — no external downloads.
+  current step highlighted, future steps ghosted). Drag to rotate. Parts
+  naming real dimensions ("Table top 120x60x3 cm", "Leg 70 cm", inches and
+  millimeters too) render at measured size; tap any part to identify it
+  (name, copy, step, state, size) in the caption below. A part may name a
+  GLTF model — "Leg (model: https://…)" — rendered in place of its
+  primitive, scaled to the measured size, with the primitive as fallback
+  while it loads or if it fails. Layout is still a schematic staging, not
+  a joined assembly.
 
 ## Layout
 
@@ -134,8 +140,8 @@ Live guided-build flow (`src/app/project.tsx` +
 - `src/services/retention.ts` — day wipe, export, quota/age photo selection
 - `src/services/memoryStore.ts` — SQLite text memories (photo only when kept)
 - `src/services/projectSession.ts` — guided-build step state machine
-- `src/services/stepModel.ts` — parts list → 3D primitive scene description
-- `src/components/StepModelView.tsx` — rotatable three.js step preview (R3F)
+- `src/services/stepModel.ts` — parts list (+ dimensions / GLTF refs) → 3D scene
+- `src/components/StepModelView.tsx` — rotatable, tap-to-identify 3D preview (R3F)
 - `src/services/vision/` — provider contract, offline mock, HTTP adapter
 - `src/services/vision/projectVision.ts` — sheet → steps, step verify, step Q&A
 - `src/services/vision/clipVision.ts` — event-clip analysis client
@@ -190,8 +196,8 @@ listing copy, privacy policy, and data-safety answers are drafted in
   on physical glasses/phone, live-backend testing with your
   `VISION_API_KEY`, and store submission (see Release above). Robot
   cameras beyond frame streams (WebRTC) only if latency demands it.
-- Richer 3D: measured assemblies from real dimensions, GLTF parts, and
-  per-part tap-to-identify on top of the schematic step preview shipping
+- Richer 3D: true joined assemblies (legs actually meeting the top)
+  on top of the measured sizes, GLTF parts, and tap-to-identify shipping
   today (see “What Project mode does today” above).
 
 ## Known limits
