@@ -1,0 +1,7 @@
+{
+  "name": "meta-dat",
+  "version": "1.0.1",
+  "description": "Local Expo module bridging Meta Wearables DAT (MWDAT / com.meta.wearable:mwdat-*) to Memory Lens.",
+  "main": "index.ts",
+  "license": "MIT"
+}
