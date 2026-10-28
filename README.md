@@ -142,6 +142,9 @@ Live guided-build flow (`src/app/project.tsx` +
 - `src/services/projectSession.ts` — guided-build step state machine
 - `src/services/stepModel.ts` — parts list (+ dimensions / GLTF refs) → 3D scene
 - `src/components/StepModelView.tsx` — rotatable, tap-to-identify 3D preview (R3F)
+- `src/components/UIButton.tsx` — one button (primary/danger/secondary + spinner)
+- `src/components/Section.tsx` — card section for the settings screens
+- `src/components/ScreenBoundary.tsx` — per-tab error boundary
 - `src/services/vision/` — provider contract, offline mock, HTTP adapter
 - `src/services/vision/projectVision.ts` — sheet → steps, step verify, step Q&A
 - `src/services/vision/clipVision.ts` — event-clip analysis client

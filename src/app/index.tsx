@@ -6,12 +6,14 @@ import {
 } from 'expo-audio';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Directory, File, Paths } from 'expo-file-system';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Button,
   FlatList,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +21,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBoundary from '@/components/ScreenBoundary';
+import Section from '@/components/Section';
+import UIButton from '@/components/UIButton';
 import {
   formatInterval,
   INTERVAL_PRESETS_SECONDS,
@@ -122,6 +128,11 @@ export default function MemoryScreen() {
   const [intervalSeconds, setIntervalSeconds] = useState(5);
   const [sourceKind, setSourceKind] = useState<CaptureSource>('phone');
   const [frameUrl, setFrameUrl] = useState('http://192.168.1.20:9000/frame.jpg');
+  // What the engine actually uses: committed on blur/submit so typing
+  // never rebuilds the capture engine mid-keystroke.
+  const [engineFrameUrl, setEngineFrameUrl] = useState(
+    'http://192.168.1.20:9000/frame.jpg',
+  );
   const [events, setEvents] = useState<MemoryEvent[]>([]);
   const [alerts, setAlerts] = useState<ScenarioAlert[]>([]);
   const [scenarios, setScenarios] = useState<Scenario[]>(DEFAULT_SCENARIOS);
@@ -141,6 +152,8 @@ export default function MemoryScreen() {
   const [recap, setRecap] = useState<Recap | null>(null);
   const [montageUri, setMontageUri] = useState<string | null>(null);
   const [montageStatus, setMontageStatus] = useState<string | null>(null);
+  const [showAllMemories, setShowAllMemories] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const scenariosRef = useRef(scenarios);
   useEffect(() => {
@@ -172,10 +185,10 @@ export default function MemoryScreen() {
         adapter = createMetaFrameSource(metaService);
         break;
       case 'glasses':
-        adapter = createHttpFrameSource('glasses', frameUrl.trim());
+        adapter = createHttpFrameSource('glasses', engineFrameUrl.trim());
         break;
       case 'robot':
-        adapter = createHttpFrameSource('robot', frameUrl.trim());
+        adapter = createHttpFrameSource('robot', engineFrameUrl.trim());
         break;
       case 'simulation':
         adapter = createSimulationSource();
@@ -204,6 +217,7 @@ export default function MemoryScreen() {
         },
         onStopped: (reason, detail) => {
           setRunning(false);
+          deactivateKeepAwake();
           if (reason === 'privacy') {
             setStatus('Stopped: private scene detected. Capture is off.');
           } else if (reason === 'error') {
@@ -219,18 +233,21 @@ export default function MemoryScreen() {
     void listEvents(100).then(setEvents);
     return () => {
       engine.stop();
+      deactivateKeepAwake();
       void adapter.stop?.().catch(() => {});
     };
-  }, [sourceKind, frameUrl, takePhoto, metaService]);
+  }, [sourceKind, engineFrameUrl, takePhoto, metaService]);
 
   const toggleCapture = () => {
     const engine = engineRef.current;
     if (!engine) return;
     if (running) {
       engine.stop();
+      deactivateKeepAwake();
     } else {
       engine.start(intervalSeconds);
       setRunning(true);
+      void activateKeepAwakeAsync().catch(() => {});
       setStatus(
         `Watching via ${captureSourceLabel(sourceKind)} every ${formatInterval(intervalSeconds)}.`,
       );
@@ -302,11 +319,19 @@ export default function MemoryScreen() {
   };
 
   const handleExport = async () => {
-    const all = await listEvents(5000);
-    setExportText(exportMemoriesAsText(all));
+    if (busy) return;
+    setBusy('export');
+    try {
+      const all = await listEvents(5000);
+      setExportText(exportMemoriesAsText(all));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const handleCleanup = async () => {
+    if (busy) return;
+    setBusy('cleanup');
     try {
       const evicted = await enforcePhotoQuota();
       const pruned = await pruneExpiredPhotos();
@@ -320,6 +345,8 @@ export default function MemoryScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRetentionStatus(`Cleanup failed: ${message}`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -339,6 +366,8 @@ export default function MemoryScreen() {
   };
 
   const wipeToday = async () => {
+    if (busy) return;
+    setBusy('wipe');
     try {
       const all = await listEvents(5000);
       const selection = wipeDaySelection(all, Date.now());
@@ -353,15 +382,25 @@ export default function MemoryScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRetentionStatus(`Wipe failed: ${message}`);
+    } finally {
+      setBusy(null);
     }
   };
 
   const askWhere = async () => {
-    const all = await listEvents(200);
-    setAnswer(answerWhere(all, query.trim() || 'keys'));
+    if (busy) return;
+    setBusy('ask');
+    try {
+      const all = await listEvents(200);
+      setAnswer(answerWhere(all, query.trim() || 'keys'));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const probeMeta = async () => {
+    if (busy) return;
+    setBusy('meta');
     try {
       const status = await metaService.status();
       if (!status.available) {
@@ -379,6 +418,8 @@ export default function MemoryScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMetaInfo(`Meta error: ${message}`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -418,6 +459,8 @@ export default function MemoryScreen() {
   };
 
   const toggleMicNote = async () => {
+    if (busy) return;
+    setBusy('mic');
     try {
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
@@ -441,6 +484,8 @@ export default function MemoryScreen() {
       setMicRecording(false);
       const message = error instanceof Error ? error.message : String(error);
       setMicStatus(`Mic error: ${message}`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -461,6 +506,8 @@ export default function MemoryScreen() {
   }, [ambientOn]);
 
   const runRecap = async (period: RecapPeriod) => {
+    if (busy) return;
+    setBusy(`recap-${period}`);
     try {
       const all = await listEvents(500);
       const result = await recapService.summarize(all, period);
@@ -468,10 +515,13 @@ export default function MemoryScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setRecap({ title: 'Recap failed', summary: message, highlights: [] });
+    } finally {
+      setBusy(null);
     }
   };
 
   const runMontage = async () => {
+    if (busy) return;
     const photos = events.filter((e) => e.photoUri !== null).slice(0, 12);
     if (photos.length === 0) {
       setMontageStatus('No kept photos yet — the montage needs event images.');
@@ -483,6 +533,7 @@ export default function MemoryScreen() {
       );
       return;
     }
+    setBusy('montage');
     try {
       setMontageStatus('Rendering cartoon montage on the server…');
       const frames: string[] = [];
@@ -496,6 +547,8 @@ export default function MemoryScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setMontageStatus(`Montage failed (${message}) — slideshow fallback.`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -515,72 +568,110 @@ export default function MemoryScreen() {
     }
   };
 
+  const visibleEvents = showAllMemories ? events : events.slice(0, 20);
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>Memory mode</Text>
-      <Text style={styles.status}>{status}</Text>
-
-      {alerts.map((a) => (
-        <View key={a.id} style={styles.alert}>
-          <Text style={styles.alertText}>{a.message}</Text>
-        </View>
-      ))}
-
-      <Text style={styles.label}>Camera source</Text>
-      <View style={styles.chips}>
-        {(
-          [
-            ['phone', 'Phone'],
-            ['meta', 'Meta'],
-            ['glasses', 'Glasses'],
-            ['robot', 'Robot'],
-            ['simulation', 'Simulation'],
-          ] as [CaptureSource, string][]
-        ).map(([kind, label]) => (
-          <Pressable
-            key={kind}
-            style={[styles.chip, kind === sourceKind && styles.chipActive]}
-            onPress={() => setSourceKind(kind)}
+    <ScreenBoundary>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.keyboard}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <ScrollView
+            contentContainerStyle={styles.container}
+            keyboardShouldPersistTaps="handled"
           >
-            <Text style={kind === sourceKind && styles.chipTextActive}>
-              {label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-      {sourceKind === 'glasses' || sourceKind === 'robot' ? (
-        <>
-          <TextInput
-            style={styles.input}
-            value={frameUrl}
-            onChangeText={setFrameUrl}
-            placeholder="ws://…/frames or http://…/frame.jpg (any smart glasses bridge)"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <Text style={styles.sub}>
-            {profileForUrl(frameUrl).label} — standard generic glasses: any
-            camera that can serve JPEG frames works.
-          </Text>
-        </>
-      ) : null}
-      {sourceKind === 'meta' ? (
-        <View style={styles.checklist}>
-          <Text style={styles.checklistTitle}>Meta glasses (DAT)</Text>
-          <Text style={styles.sub}>
-            Native Wearables DAT stream (dev build + Meta console app ID).
-            Alerts mirror to the lens display.
-          </Text>
-          <View style={styles.row}>
-            <Button title="Check Meta" onPress={() => void probeMeta()} />
-            <Button
-              title="Register app"
-              onPress={() => void metaService.register().catch(() => {})}
-            />
-          </View>
-          {metaInfo ? <Text style={styles.answer}>{metaInfo}</Text> : null}
-        </View>
-      ) : null}
+            <Text style={styles.heading}>Memory mode</Text>
+            <Text style={styles.status}>{status}</Text>
+
+            {alerts.map((a) => (
+              <View key={a.id} style={styles.alert}>
+                <Text style={styles.alertText}>{a.message}</Text>
+              </View>
+            ))}
+
+            <Section title="Camera source">
+              <View style={styles.chips}>
+                {(
+                  [
+                    ['phone', 'Phone'],
+                    ['meta', 'Meta'],
+                    ['glasses', 'Glasses'],
+                    ['robot', 'Robot'],
+                    ['simulation', 'Simulation'],
+                  ] as [CaptureSource, string][]
+                ).map(([kind, label]) => (
+                  <Pressable
+                    key={kind}
+                    style={[
+                      styles.chip,
+                      kind === sourceKind && styles.chipActive,
+                    ]}
+                    onPress={() => setSourceKind(kind)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${label} camera source`}
+                    accessibilityState={{ selected: kind === sourceKind }}
+                  >
+                    <Text
+                      style={kind === sourceKind && styles.chipTextActive}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              {sourceKind === 'glasses' || sourceKind === 'robot' ? (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    value={frameUrl}
+                    onChangeText={setFrameUrl}
+                    onBlur={() => setEngineFrameUrl(frameUrl)}
+                    onSubmitEditing={() => setEngineFrameUrl(frameUrl)}
+                    placeholder="ws://…/frames or http://…/frame.jpg (any smart glasses bridge)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="done"
+                  />
+                  <Text style={styles.sub}>
+                    {profileForUrl(frameUrl).label} — standard generic
+                    glasses: any camera that can serve JPEG frames works.
+                  </Text>
+                </>
+              ) : null}
+              {sourceKind === 'meta' ? (
+                <>
+                  <Text style={styles.sub}>
+                    Native Wearables DAT stream (dev build + Meta console
+                    app ID). Alerts mirror to the lens display.
+                  </Text>
+                  <View style={styles.row}>
+                    <View style={styles.flex}>
+                      <UIButton
+                        title="Check Meta"
+                        variant="secondary"
+                        loading={busy === 'meta'}
+                        disabled={busy !== null}
+                        onPress={() => void probeMeta()}
+                      />
+                    </View>
+                    <View style={styles.flex}>
+                      <UIButton
+                        title="Register app"
+                        variant="secondary"
+                        disabled={busy !== null}
+                        onPress={() =>
+                          void metaService.register().catch(() => {})
+                        }
+                      />
+                    </View>
+                  </View>
+                  {metaInfo ? (
+                    <Text style={styles.answer}>{metaInfo}</Text>
+                  ) : null}
+                </>
+              ) : null}
+            </Section>
 
       {sourceKind === 'phone' && permission?.granted ? (
         <CameraView
@@ -600,241 +691,317 @@ export default function MemoryScreen() {
                 : `${captureSourceLabel(sourceKind)}: frames come from the URL above.`}
           </Text>
           {sourceKind === 'phone' ? (
-            <Button title="Grant camera permission" onPress={requestPermission} />
+            <UIButton
+              title="Grant camera permission"
+              variant="secondary"
+              onPress={() => void requestPermission()}
+            />
           ) : null}
         </View>
       )}
 
-      <Text style={styles.label}>Photo every</Text>
-      <View style={styles.chips}>
-        {INTERVAL_PRESETS_SECONDS.map((s) => (
-          <Pressable
-            key={s}
-            style={[styles.chip, s === intervalSeconds && styles.chipActive]}
-            onPress={() => pickInterval(s)}
-          >
-            <Text style={s === intervalSeconds && styles.chipTextActive}>
-              {formatInterval(s)}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <Pressable
-        style={[styles.mainButton, running && styles.mainButtonStop]}
-        onPress={toggleCapture}
+      <Section
+        title="Watching"
+        hint="A photo on a timer. Raise the interval to save battery."
       >
-        <Text style={styles.mainButtonText}>
-          {running ? 'Stop watching' : 'Start watching'}
-        </Text>
-      </Pressable>
+        <View style={styles.chips}>
+          {INTERVAL_PRESETS_SECONDS.map((s) => (
+            <Pressable
+              key={s}
+              style={[styles.chip, s === intervalSeconds && styles.chipActive]}
+              onPress={() => pickInterval(s)}
+              accessibilityRole="button"
+              accessibilityLabel={`Photo every ${formatInterval(s)}`}
+              accessibilityState={{ selected: s === intervalSeconds }}
+            >
+              <Text style={s === intervalSeconds && styles.chipTextActive}>
+                {formatInterval(s)}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <UIButton
+          title={running ? 'Stop watching' : 'Start watching'}
+          variant={running ? 'danger' : 'primary'}
+          onPress={toggleCapture}
+        />
+      </Section>
 
-      <Text style={styles.label}>Where is my…</Text>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.flex]}
-          value={query}
-          onChangeText={setQuery}
-          placeholder="keys"
-        />
-        <Button title="Ask" onPress={askWhere} />
-      </View>
-      {answer ? <Text style={styles.answer}>{answer}</Text> : null}
+      <Section
+        title="Find & watch for"
+        hint="Ask where things are, or set alerts for leaving without them. Tap a watch below to remove it."
+      >
+        <Text style={styles.fieldLabel}>Where is my…</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="keys"
+            returnKeyType="search"
+            onSubmitEditing={() => void askWhere()}
+          />
+          <UIButton
+            title="Ask"
+            variant="secondary"
+            loading={busy === 'ask'}
+            disabled={busy !== null}
+            onPress={() => void askWhere()}
+          />
+        </View>
+        {answer ? <Text style={styles.answer}>{answer}</Text> : null}
 
-      <Text style={styles.label}>Track an object</Text>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.flex]}
-          value={trackInput}
-          onChangeText={setTrackInput}
-          placeholder="e.g. wallet, glasses, guitar"
-        />
-        <Button
-          title="Track"
-          onPress={() => {
-            addScenario('remember-object', trackInput);
-            setTrackInput('');
-          }}
-        />
-      </View>
+        <Text style={styles.fieldLabel}>Track an object</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            value={trackInput}
+            onChangeText={setTrackInput}
+            placeholder="e.g. wallet, glasses, guitar"
+            returnKeyType="done"
+          />
+          <UIButton
+            title="Track"
+            variant="secondary"
+            onPress={() => {
+              addScenario('remember-object', trackInput);
+              setTrackInput('');
+            }}
+          />
+        </View>
 
-      <Text style={styles.label}>{"Don't let me leave without…"}</Text>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.flex]}
-          value={exitInput}
-          onChangeText={setExitInput}
-          placeholder="e.g. keys, phone"
-        />
-        <Button
-          title="Watch"
-          onPress={() => {
-            addScenario('exit-check', exitInput);
-            setExitInput('');
-          }}
-        />
-      </View>
+        <Text style={styles.fieldLabel}>{"Don't let me leave without…"}</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            value={exitInput}
+            onChangeText={setExitInput}
+            placeholder="e.g. keys, phone"
+            returnKeyType="done"
+          />
+          <UIButton
+            title="Watch"
+            variant="secondary"
+            onPress={() => {
+              addScenario('exit-check', exitInput);
+              setExitInput('');
+            }}
+          />
+        </View>
 
-      <Text style={styles.label}>{"Don't let me leave before…"}</Text>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.flex]}
-          value={requirementInput}
-          onChangeText={setRequirementInput}
-          placeholder="e.g. brushed teeth, took meds"
-        />
-        <Button
-          title="Require"
-          onPress={() => {
-            addRequirement(requirementInput);
-            setRequirementInput('');
-          }}
-        />
-      </View>
+        <Text style={styles.fieldLabel}>{"Don't let me leave before…"}</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            value={requirementInput}
+            onChangeText={setRequirementInput}
+            placeholder="e.g. brushed teeth, took meds"
+            returnKeyType="done"
+          />
+          <UIButton
+            title="Require"
+            variant="secondary"
+            onPress={() => {
+              addRequirement(requirementInput);
+              setRequirementInput('');
+            }}
+          />
+        </View>
 
-      <Text style={styles.label}>Checklist (gig kit, groceries…)</Text>
-      <View style={styles.row}>
+        <Text style={styles.fieldLabel}>Checklist (gig kit, groceries…)</Text>
         <TextInput
-          style={[styles.input, styles.flex]}
+          style={styles.input}
           value={checklistTitle}
           onChangeText={setChecklistTitle}
           placeholder="List name, e.g. Gig kit"
+          returnKeyType="next"
         />
-      </View>
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.flex]}
-          value={checklistItems}
-          onChangeText={setChecklistItems}
-          placeholder="Items, comma separated: guitar, cable, picks"
-        />
-        <Button
-          title="Add list"
-          onPress={() => {
-            addChecklist(checklistTitle, checklistItems);
-            setChecklistTitle('');
-            setChecklistItems('');
-          }}
-        />
-      </View>
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            value={checklistItems}
+            onChangeText={setChecklistItems}
+            placeholder="Items, comma separated: guitar, cable, picks"
+            returnKeyType="done"
+          />
+          <UIButton
+            title="Add list"
+            variant="secondary"
+            onPress={() => {
+              addChecklist(checklistTitle, checklistItems);
+              setChecklistTitle('');
+              setChecklistItems('');
+            }}
+          />
+        </View>
 
-      <View style={styles.chips}>
-        {scenarios.map((s) => (
-          <Pressable
-            key={s.id}
-            style={styles.chip}
-            onPress={() =>
-              setScenarios((prev) => prev.filter((x) => x.id !== s.id))
-            }
-          >
-            <Text>
-              {s.kind === 'exit-check' || s.kind === 'requirement'
-                ? '🚪 '
-                : s.kind === 'checklist'
-                  ? '🧾 '
-                  : '👁 '}
-              {scenarioDisplayName(s)} ✕
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+        <View style={styles.chips}>
+          {scenarios.map((s) => (
+            <Pressable
+              key={s.id}
+              style={styles.chip}
+              onPress={() =>
+                setScenarios((prev) => prev.filter((x) => x.id !== s.id))
+              }
+              accessibilityRole="button"
+              accessibilityLabel={`Remove watch: ${scenarioDisplayName(s)}`}
+            >
+              <Text>
+                {scenarioDisplayName(s)} ✕
+              </Text>
+            </Pressable>
+          ))}
+        </View>
 
-      {scenarios
-        .filter(
-          (s): s is Extract<Scenario, { kind: 'checklist' }> =>
-            s.kind === 'checklist',
-        )
-        .map((s) => (
-          <View key={s.id} style={styles.checklist}>
-            <Text style={styles.checklistTitle}>{s.title}</Text>
-            {checklistProgress(events, s).map((p) => (
-              <Text key={p.item} style={styles.sub}>
-                {p.held ? '✅' : p.seen ? '👁' : '○'} {p.item}
-                {p.held ? ' (packed)' : p.seen ? ' (seen)' : ''}
+        {scenarios
+          .filter(
+            (s): s is Extract<Scenario, { kind: 'checklist' }> =>
+              s.kind === 'checklist',
+          )
+          .map((s) => (
+            <View key={s.id} style={styles.checklist}>
+              <Text style={styles.checklistTitle}>{s.title}</Text>
+              {checklistProgress(events, s).map((p) => (
+                <Text key={p.item} style={styles.sub}>
+                  <Text style={styles.progressState}>
+                    {p.held ? 'Packed' : p.seen ? 'Seen' : 'Todo'}
+                  </Text>
+                  {'  ·  '}
+                  {p.item}
+                </Text>
+              ))}
+            </View>
+          ))}
+      </Section>
+
+      <Section
+        title="Mic only (no camera)"
+        hint="Voice notes keep their audio; ambient samples become text memories and the audio is deleted."
+      >
+        <View style={styles.row}>
+          <View style={styles.flex}>
+            <UIButton
+              title={micRecording ? 'Save voice note' : 'Record voice note'}
+              variant={micRecording ? 'danger' : 'primary'}
+              loading={busy === 'mic'}
+              disabled={busy !== null}
+              onPress={() => void toggleMicNote()}
+            />
+          </View>
+          <View style={styles.flex}>
+            <UIButton
+              title={ambientOn ? 'Ambient: on' : 'Ambient: off'}
+              variant="secondary"
+              onPress={() => {
+                const next = !ambientOn;
+                setAmbientOn(next);
+                if (next) {
+                  setMicStatus(
+                    'Mic ambient on — short samples become text memories.',
+                  );
+                }
+              }}
+            />
+          </View>
+        </View>
+        {micStatus ? <Text style={styles.answer}>{micStatus}</Text> : null}
+      </Section>
+
+      <Section title="Recaps">
+        <View style={styles.row}>
+          <View style={styles.flex}>
+            <UIButton
+              title="End of day"
+              variant="secondary"
+              loading={busy === 'recap-day'}
+              disabled={busy !== null}
+              onPress={() => void runRecap('day')}
+            />
+          </View>
+          <View style={styles.flex}>
+            <UIButton
+              title="End of week"
+              variant="secondary"
+              loading={busy === 'recap-week'}
+              disabled={busy !== null}
+              onPress={() => void runRecap('week')}
+            />
+          </View>
+        </View>
+        {recap ? (
+          <View style={styles.checklist}>
+            <Text style={styles.checklistTitle}>{recap.title}</Text>
+            <Text selectable>{recap.summary}</Text>
+            {recap.highlights.map((h) => (
+              <Text key={h} style={styles.sub}>
+                • {h}
               </Text>
             ))}
           </View>
-        ))}
+        ) : null}
+      </Section>
 
-      <Text style={styles.label}>Mic only (no camera)</Text>
-      <Text style={styles.sub}>
-        Voice notes keep their audio; ambient samples become text memories
-        and the audio is deleted.
-      </Text>
-      <View style={styles.row}>
-        <Button
-          title={micRecording ? 'Save voice note' : 'Record voice note'}
-          color={micRecording ? '#c62828' : undefined}
-          onPress={() => void toggleMicNote()}
+      <Section
+        title="Cartoon montage"
+        hint="Saved event photos become a cartoon video (server) or slideshow."
+      >
+        <UIButton
+          title="Make cartoon montage"
+          variant="secondary"
+          loading={busy === 'montage'}
+          disabled={busy !== null}
+          onPress={() => void runMontage()}
         />
-        <Button
-          title={ambientOn ? 'Ambient: on' : 'Ambient: off'}
-          onPress={() => {
-            const next = !ambientOn;
-            setAmbientOn(next);
-            if (next) {
-              setMicStatus(
-                'Mic ambient on — short samples become text memories.',
-              );
-            }
-          }}
-        />
-      </View>
-      {micStatus ? <Text style={styles.answer}>{micStatus}</Text> : null}
+        {montageStatus ? (
+          <Text style={styles.answer}>{montageStatus}</Text>
+        ) : null}
+        {montageUri ? <VideoPlayer uri={montageUri} /> : null}
+      </Section>
 
-      <Text style={styles.label}>Recaps</Text>
-      <View style={styles.row}>
-        <Button title="End of day" onPress={() => void runRecap('day')} />
-        <Button title="End of week" onPress={() => void runRecap('week')} />
-      </View>
-      {recap ? (
-        <View style={styles.checklist}>
-          <Text style={styles.checklistTitle}>{recap.title}</Text>
-          <Text selectable>{recap.summary}</Text>
-          {recap.highlights.map((h) => (
-            <Text key={h} style={styles.sub}>
-              • {h}
-            </Text>
-          ))}
+      <Section
+        title="Storage & retention"
+        hint={`${keptPhotoRefs(events).length} kept photos (cap ${DEFAULT_MAX_KEPT_PHOTOS}, auto-pruned after 30 days).`}
+      >
+        <View style={styles.row}>
+          <View style={styles.flex}>
+            <UIButton
+              title="Clean up old photos"
+              variant="secondary"
+              loading={busy === 'cleanup'}
+              disabled={busy !== null}
+              onPress={() => void handleCleanup()}
+            />
+          </View>
+          <View style={styles.flex}>
+            <UIButton
+              title="Export memories"
+              variant="secondary"
+              loading={busy === 'export'}
+              disabled={busy !== null}
+              onPress={() => void handleExport()}
+            />
+          </View>
         </View>
-      ) : null}
-
-      <Text style={styles.label}>Cartoon montage</Text>
-      <Text style={styles.sub}>
-        Saved event photos become a cartoon video (server) or slideshow.
-      </Text>
-      <Button title="Make cartoon montage" onPress={() => void runMontage()} />
-      {montageStatus ? <Text style={styles.answer}>{montageStatus}</Text> : null}
-      {montageUri ? <VideoPlayer uri={montageUri} /> : null}
-
-      <Text style={styles.label}>Storage & retention</Text>
-      <Text style={styles.sub}>
-        {keptPhotoRefs(events).length} kept photos (cap {DEFAULT_MAX_KEPT_PHOTOS},
-        auto-pruned after 30 days).
-      </Text>
-      <View style={styles.row}>
-        <Button title="Clean up old photos" onPress={() => void handleCleanup()} />
-        <Button title="Export memories" onPress={() => void handleExport()} />
-      </View>
-      <View style={styles.row}>
-        <Button
+        <UIButton
           title="Wipe today’s memories"
-          color="#c62828"
+          variant="danger"
+          loading={busy === 'wipe'}
+          disabled={busy !== null}
           onPress={handleWipeToday}
         />
-      </View>
-      {retentionStatus ? (
-        <Text style={styles.answer}>{retentionStatus}</Text>
-      ) : null}
-      {exportText ? (
-        <Text style={styles.exportBox} selectable>
-          {exportText}
-        </Text>
-      ) : null}
+        {retentionStatus ? (
+          <Text style={styles.answer}>{retentionStatus}</Text>
+        ) : null}
+        {exportText ? (
+          <Text style={styles.exportBox} selectable>
+            {exportText}
+          </Text>
+        ) : null}
+      </Section>
 
       <Text style={styles.label}>Memories</Text>
       <FlatList
-        data={events}
+        data={visibleEvents}
         scrollEnabled={false}
         keyExtractor={(e) => String(e.id)}
         ListEmptyComponent={<Text style={styles.sub}>No memories yet.</Text>}
@@ -851,8 +1018,8 @@ export default function MemoryScreen() {
                   ? 'privacy stop — no photo kept'
                   : item.kind === 'audio'
                     ? item.audioUri
-                      ? '🎙 voice note — audio kept'
-                      : '🎙 heard — audio deleted'
+                      ? 'voice note — audio kept'
+                      : 'heard — audio deleted'
                     : item.photoUri
                       ? 'photo kept'
                       : 'text memory — photo deleted'}
@@ -861,6 +1028,8 @@ export default function MemoryScreen() {
                 <Pressable
                   style={styles.deletePhoto}
                   onPress={() => void deleteKeptPhoto(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete photo for ${item.caption}`}
                 >
                   <Text style={styles.deletePhotoText}>
                     Delete photo (keep text)
@@ -871,15 +1040,33 @@ export default function MemoryScreen() {
           </View>
         )}
       />
-    </ScrollView>
+      {!showAllMemories && events.length > 20 ? (
+        <UIButton
+          title={`Show all ${events.length} memories`}
+          variant="secondary"
+          onPress={() => setShowAllMemories(true)}
+        />
+      ) : null}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </ScreenBoundary>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 10 },
+  safe: { flex: 1 },
+  keyboard: { flex: 1 },
+  container: {
+    padding: 16,
+    gap: 12,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+  },
   heading: { fontSize: 22, fontWeight: '700' },
   status: { color: '#555' },
-  sub: { color: '#777' },
+  sub: { color: '#5f6368' },
   alert: { backgroundColor: '#ffe9e9', borderRadius: 8, padding: 10 },
   alertText: { color: '#8a1010', fontWeight: '600' },
   camera: { height: 240, borderRadius: 12, overflow: 'hidden' },
@@ -894,24 +1081,19 @@ const styles = StyleSheet.create({
   },
   placeholderText: { color: '#445', textAlign: 'center' },
   label: { fontWeight: '700', marginTop: 6 },
+  fieldLabel: { fontWeight: '600', fontSize: 14 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     backgroundColor: '#eef3ff',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    minHeight: 40,
+    justifyContent: 'center',
     overflow: 'hidden',
   },
   chipActive: { backgroundColor: '#0a6cff' },
   chipTextActive: { color: '#fff', fontWeight: '700' },
-  mainButton: {
-    backgroundColor: '#0a6cff',
-    borderRadius: 10,
-    padding: 14,
-    alignItems: 'center',
-  },
-  mainButtonStop: { backgroundColor: '#c62828' },
-  mainButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   flex: { flex: 1 },
   input: {
@@ -931,6 +1113,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   checklistTitle: { fontWeight: '700' },
+  progressState: { fontWeight: '700' },
   exportBox: {
     backgroundColor: '#fafafa',
     borderWidth: 1,
@@ -953,5 +1136,5 @@ const styles = StyleSheet.create({
   },
   thumb: { width: 56, height: 56, borderRadius: 8 },
   caption: { fontWeight: '600' },
-  meta: { color: '#777', fontSize: 12, marginTop: 2 },
+  meta: { color: '#5f6368', fontSize: 12, marginTop: 2 },
 });

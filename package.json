@@ -3,21 +3,26 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
     "@react-three/fiber": "^9.8.2",
-    "expo": "~58.0.20",
+    "expo": "~58.0.21",
     "expo-asset": "~58.0.18",
     "expo-audio": "~58.0.10",
-    "expo-camera": "~58.0.13",
+    "expo-build-properties": "~58.0.11",
+    "expo-camera": "~58.0.14",
     "expo-constants": "~58.0.13",
-    "expo-dev-client": "~58.0.16",
+    "expo-dev-client": "~58.0.17",
     "expo-file-system": "~58.0.11",
+    "expo-font": "~58.0.11",
     "expo-gl": "~58.0.3",
-    "expo-linking": "~58.0.14",
-    "expo-notifications": "~58.1.6",
-    "expo-router": "~58.0.27",
+    "expo-keep-awake": "~58.0.3",
+    "expo-linking": "~58.0.15",
+    "expo-notifications": "~58.1.7",
+    "expo-router": "~58.0.28",
+    "expo-splash-screen": "~58.0.12",
     "expo-sqlite": "~58.0.14",
     "expo-status-bar": "~58.0.4",
-    "expo-video": "~58.0.12",
+    "expo-video": "~58.0.13",
     "react": "19.3.0",
     "react-native": "0.88.0",
     "react-native-safe-area-context": "~5.10.1",
@@ -32,7 +37,7 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~58.0.4",
     "jest": "^30.5.2",
-    "jest-expo": "^58.0.12",
+    "jest-expo": "~58.0.13",
     "typescript": "~6.0.3",
     "ws": "^8.22.0"
   },
@@ -50,5 +55,8 @@
   "jest": {
     "preset": "jest-expo"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "react-dom": "19.3.0"
+  }
 }

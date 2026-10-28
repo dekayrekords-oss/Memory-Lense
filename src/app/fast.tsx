@@ -1,9 +1,11 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Directory, File, Paths } from 'expo-file-system';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Button,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +13,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenBoundary from '@/components/ScreenBoundary';
+import Section from '@/components/Section';
+import UIButton from '@/components/UIButton';
 import {
   assembleClip,
   byteChangeScore,
@@ -73,6 +79,46 @@ async function saveClipFrame(
   await file.write(bytes);
   return file.uri;
 }
+
+// Event rows re-render only when their event changes: the change meter
+// above updates several times a second, and must not drag this list
+// through reconciliation with it.
+const FastEventRow = memo(function FastEventRow({ event }: { event: FastEvent }) {
+  return (
+    <View style={rowStyles.event}>
+      {event.thumbUri ? (
+        <Image source={{ uri: event.thumbUri }} style={rowStyles.thumb} />
+      ) : null}
+      <View style={rowStyles.flex}>
+        <Text style={rowStyles.caption}>
+          {event.caption ?? 'Sudden change captured'}
+        </Text>
+        <Text style={rowStyles.meta}>
+          {new Date(event.ts).toLocaleTimeString()} · peak{' '}
+          {(event.peak * 100).toFixed(0)}% · kept {event.framesKept} frames
+          around the event ·{' '}
+          {event.analyzed === 'clip' ? 'clip analyzed' : 'single frame'}
+        </Text>
+      </View>
+    </View>
+  );
+});
+
+const rowStyles = StyleSheet.create({
+  event: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e3e3e3',
+    borderRadius: 10,
+    padding: 10,
+  },
+  flex: { flex: 1 },
+  thumb: { width: 56, height: 56, borderRadius: 8 },
+  caption: { fontWeight: '600' },
+  meta: { color: '#5f6368', fontSize: 12, marginTop: 2 },
+});
 
 export default function FastCaptureScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -207,6 +253,7 @@ export default function FastCaptureScreen() {
       streamRef.current.stop();
       streamRef.current = null;
     }
+    deactivateKeepAwake();
     setArmed(false);
   }, []);
 
@@ -218,7 +265,9 @@ export default function FastCaptureScreen() {
       const prev = prevBytesRef.current;
       const change = prev ? byteChangeScore(prev, bytes) : 0;
       prevBytesRef.current = bytes;
-      setScore(change);
+      // Rounded so identical readings bail out of re-render: the meter
+      // displays whole percent anyway.
+      setScore(Math.round(change * 100) / 100);
 
       ringRef.current.push(now, { bytes, uri });
 
@@ -296,6 +345,7 @@ export default function FastCaptureScreen() {
     triggerRef.current.reset();
     pendingRef.current = null;
     setArmed(true);
+    void activateKeepAwakeAsync().catch(() => {});
     const streaming =
       (sourceKind === 'robot' || sourceKind === 'glasses') &&
       isStreamUrl(frameUrl);
@@ -329,131 +379,156 @@ export default function FastCaptureScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>Fast Capture</Text>
-      <Text style={styles.status}>{status}</Text>
-
-      <Text style={styles.label}>Frame source</Text>
-      <View style={styles.chips}>
-        {(
-          [
-            ['simulation', 'Simulation'],
-            ['robot', 'Robot'],
-            ['glasses', 'Glasses'],
-            ['phone', 'Phone'],
-          ] as [CaptureSource, string][]
-        ).map(([kind, label]) => (
-          <Pressable
-            key={kind}
-            style={[styles.chip, kind === sourceKind && styles.chipActive]}
-            onPress={() => setSourceKind(kind)}
+    <ScreenBoundary>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.keyboard}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <ScrollView
+            contentContainerStyle={styles.container}
+            keyboardShouldPersistTaps="handled"
           >
-            <Text style={kind === sourceKind && styles.chipTextActive}>{label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      {sourceKind === 'glasses' || sourceKind === 'robot' ? (
-        <>
-          <TextInput
-            style={styles.input}
-            value={frameUrl}
-            onChangeText={setFrameUrl}
-            placeholder="ws://192.168.1.20:9000/frames or http://…/frame.jpg"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <Text style={styles.sub}>
-            {isStreamUrl(frameUrl)
-              ? 'Stream mode: one JPEG frame per binary message, analyzed as a clip.'
-              : 'Snapshot mode: polls the URL ~5/s. Switch to ws:// to stream live.'}
-          </Text>
-        </>
-      ) : null}
+            <Text style={styles.heading}>Fast Capture</Text>
+            <Text style={styles.status}>{status}</Text>
 
-      {sourceKind === 'phone' && permission?.granted ? (
-        <CameraView ref={cameraRef} style={styles.camera} facing="back" />
-      ) : sourceKind === 'phone' ? (
-        <View style={styles.cameraPlaceholder}>
-          <Text style={styles.placeholderText}>
-            Phone Fast Capture needs camera permission.
-          </Text>
-          <Button title="Grant camera permission" onPress={requestPermission} />
-        </View>
-      ) : (
-        <View style={styles.cameraPlaceholder}>
-          <Text style={styles.placeholderText}>
-            {sourceKind === 'simulation'
-              ? 'Simulation generates a sudden change about every 4 seconds.'
-              : isStreamUrl(frameUrl)
-                ? 'Live stream: frames arrive over the socket as they are sent.'
-                : 'Snapshots are polled from the URL above ~5/s.'}
-          </Text>
-        </View>
-      )}
+            <Section title="Frame source">
+              <View style={styles.chips}>
+                {(
+                  [
+                    ['simulation', 'Simulation'],
+                    ['robot', 'Robot'],
+                    ['glasses', 'Glasses'],
+                    ['phone', 'Phone'],
+                  ] as [CaptureSource, string][]
+                ).map(([kind, label]) => (
+                  <Pressable
+                    key={kind}
+                    style={[
+                      styles.chip,
+                      kind === sourceKind && styles.chipActive,
+                    ]}
+                    onPress={() => setSourceKind(kind)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${label} frame source`}
+                    accessibilityState={{ selected: kind === sourceKind }}
+                  >
+                    <Text
+                      style={kind === sourceKind && styles.chipTextActive}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              {sourceKind === 'glasses' || sourceKind === 'robot' ? (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    value={frameUrl}
+                    onChangeText={setFrameUrl}
+                    placeholder="ws://192.168.1.20:9000/frames or http://…/frame.jpg"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="done"
+                  />
+                  <Text style={styles.sub}>
+                    {isStreamUrl(frameUrl)
+                      ? 'Stream mode: one JPEG frame per binary message, analyzed as a clip.'
+                      : 'Snapshot mode: polls the URL ~5/s. Switch to ws:// to stream live.'}
+                  </Text>
+                </>
+              ) : null}
+            </Section>
 
-      <Text style={styles.label}>
-        Change now: {(score * 100).toFixed(0)}% · trigger at{' '}
-        {(DEFAULT_TRIGGER_CONFIG.threshold * 100).toFixed(0)}%
-      </Text>
-      <View style={styles.meterTrack}>
-        <View
-          style={[
-            styles.meterFill,
-            {
-              width: `${Math.min(100, Math.round(score * 100))}%`,
-              backgroundColor:
-                score >= DEFAULT_TRIGGER_CONFIG.threshold ? '#c62828' : '#0a6cff',
-            },
-          ]}
-        />
-      </View>
+            {sourceKind === 'phone' && permission?.granted ? (
+              <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+            ) : sourceKind === 'phone' ? (
+              <View style={styles.cameraPlaceholder}>
+                <Text style={styles.placeholderText}>
+                  Phone Fast Capture needs camera permission.
+                </Text>
+                <UIButton
+                  title="Grant camera permission"
+                  variant="secondary"
+                  onPress={() => void requestPermission()}
+                />
+              </View>
+            ) : (
+              <View style={styles.cameraPlaceholder}>
+                <Text style={styles.placeholderText}>
+                  {sourceKind === 'simulation'
+                    ? 'Simulation generates a sudden change about every 4 seconds.'
+                    : isStreamUrl(frameUrl)
+                      ? 'Live stream: frames arrive over the socket as they are sent.'
+                      : 'Snapshots are polled from the URL above ~5/s.'}
+                </Text>
+              </View>
+            )}
 
-      <Pressable
-        style={[styles.mainButton, armed && styles.mainButtonStop]}
-        onPress={toggleArm}
-      >
-        <Text style={styles.mainButtonText}>{armed ? 'Stop' : 'Arm trigger'}</Text>
-      </Pressable>
-
-      <Text style={styles.label}>Events</Text>
-      {events.length === 0 ? (
-        <Text style={styles.sub}>No events yet. Arm the trigger and wait for a spike.</Text>
-      ) : (
-        events.map((e) => (
-          <View key={e.id} style={styles.event}>
-            {e.thumbUri ? (
-              <Image source={{ uri: e.thumbUri }} style={styles.thumb} />
-            ) : null}
-            <View style={styles.flex}>
-              <Text style={styles.caption}>
-                {e.caption ?? 'Sudden change captured'}
+            <Section title="Change trigger">
+              <Text style={styles.sub}>
+                Change now: {(score * 100).toFixed(0)}% · trigger at{' '}
+                {(DEFAULT_TRIGGER_CONFIG.threshold * 100).toFixed(0)}%
               </Text>
-              <Text style={styles.meta}>
-                {new Date(e.ts).toLocaleTimeString()} · peak{' '}
-                {(e.peak * 100).toFixed(0)}% · kept {e.framesKept} frames
-                around the event ·{' '}
-                {e.analyzed === 'clip' ? 'clip analyzed' : 'single frame'}
+              <View style={styles.meterTrack}>
+                <View
+                  style={[
+                    styles.meterFill,
+                    {
+                      width: `${Math.min(100, Math.round(score * 100))}%`,
+                      backgroundColor:
+                        score >= DEFAULT_TRIGGER_CONFIG.threshold
+                          ? '#c62828'
+                          : '#0a6cff',
+                    },
+                  ]}
+                />
+              </View>
+              <UIButton
+                title={armed ? 'Stop' : 'Arm trigger'}
+                variant={armed ? 'danger' : 'primary'}
+                onPress={toggleArm}
+              />
+            </Section>
+
+            <Text style={styles.label}>Events</Text>
+            {events.length === 0 ? (
+              <Text style={styles.sub}>
+                No events yet. Arm the trigger and wait for a spike.
               </Text>
-            </View>
-          </View>
-        ))
-      )}
-    </ScrollView>
+            ) : (
+              events.map((e) => <FastEventRow key={e.id} event={e} />)
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </ScreenBoundary>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 10 },
+  safe: { flex: 1 },
+  keyboard: { flex: 1 },
+  container: {
+    padding: 16,
+    gap: 12,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+  },
   heading: { fontSize: 22, fontWeight: '700' },
   status: { color: '#555' },
-  sub: { color: '#777' },
+  sub: { color: '#5f6368' },
   label: { fontWeight: '700', marginTop: 6 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     backgroundColor: '#eef3ff',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    minHeight: 40,
+    justifyContent: 'center',
     overflow: 'hidden',
   },
   chipActive: { backgroundColor: '#0a6cff' },
@@ -483,26 +558,4 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   meterFill: { height: 12, borderRadius: 6 },
-  mainButton: {
-    backgroundColor: '#0a6cff',
-    borderRadius: 10,
-    padding: 14,
-    alignItems: 'center',
-  },
-  mainButtonStop: { backgroundColor: '#c62828' },
-  mainButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  event: {
-    flexDirection: 'row',
-    gap: 10,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e3e3e3',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
-  },
-  thumb: { width: 56, height: 56, borderRadius: 8 },
-  flex: { flex: 1 },
-  caption: { fontWeight: '600' },
-  meta: { color: '#777', fontSize: 12, marginTop: 2 },
 });

@@ -9,7 +9,10 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.memorylens.app"
+      "bundleIdentifier": "com.memorylens.app",
+      "infoPlist": {
+        "NSAllowsLocalNetworking": true
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -34,13 +37,31 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Memory Lens uses the camera to remember where things are and watch for what you asked it to track."
+          "cameraPermission": "Memory Lens uses the camera to remember where things are and watch for what you asked it to track.",
+          "microphonePermission": "Memory Lens uses the microphone for voice notes, ambient listening, and POV clip audio."
         }
       ],
       [
         "expo-notifications",
         {
-          "enableRemoteNotifications": false
+          "enableRemoteNotifications": false,
+          "color": "#0a6cff"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#E6F4FE"
         }
       ],
       "expo-asset",

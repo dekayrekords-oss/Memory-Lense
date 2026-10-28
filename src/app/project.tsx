@@ -1,16 +1,22 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Directory, File, Paths } from 'expo-file-system';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button,
-  Pressable,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
+import ScreenBoundary from '@/components/ScreenBoundary';
+import Section from '@/components/Section';
 import StepModelView from '@/components/StepModelView';
+import UIButton from '@/components/UIButton';
 import VideoPlayer from '@/components/VideoPlayer';
 import { eventsSeeing, listEvents } from '@/services/memoryStore';
 import {
@@ -64,6 +70,8 @@ export default function ProjectScreen() {
   const [povVideoUri, setPovVideoUri] = useState<string | null>(null);
   const [povStatus, setPovStatus] = useState<string | null>(null);
   const povPromiseRef = useRef<Promise<{ uri: string }> | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [tabFocused, setTabFocused] = useState(true);
 
   const sessionRef = useRef<ProjectSessionState | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -89,8 +97,18 @@ export default function ProjectScreen() {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    deactivateKeepAwake();
     setWatching(false);
   }, []);
+
+  // Tab screens stay mounted when switching tabs: park the 3D render
+  // loop while this tab is hidden so it stops burning battery.
+  useFocusEffect(
+    useCallback(() => {
+      setTabFocused(true);
+      return () => setTabFocused(false);
+    }, []),
+  );
 
   const runWatchTick = useCallback(async () => {
     if (busyRef.current) return;
@@ -158,6 +176,7 @@ export default function ProjectScreen() {
   useEffect(
     () => () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      deactivateKeepAwake();
     },
     [],
   );
@@ -166,6 +185,7 @@ export default function ProjectScreen() {
     const state = sessionRef.current;
     if (!state || state.status === 'done' || timerRef.current) return;
     setWatching(true);
+    void activateKeepAwakeAsync().catch(() => {});
     setStatus('Watching your build every 3s…');
     timerRef.current = setInterval(() => {
       void tickRef.current();
@@ -209,11 +229,13 @@ export default function ProjectScreen() {
   };
 
   const findPart = async () => {
+    if (busy) return;
     const part = partQuery.trim();
     if (!part) {
       setPartResult('Not seen yet');
       return;
     }
+    setBusy('find');
     try {
       const seen = await eventsSeeing(part);
       const latest = seen[0];
@@ -233,10 +255,13 @@ export default function ProjectScreen() {
       setPartResult(where.includes("haven't seen") ? 'Not seen yet' : where);
     } catch {
       setPartResult('Not seen yet');
+    } finally {
+      setBusy(null);
     }
   };
 
   const askQuestion = async () => {
+    if (busy) return;
     const text = question.trim();
     if (!text) {
       setAnswer('Type a question first.');
@@ -248,10 +273,13 @@ export default function ProjectScreen() {
       setAnswer('The build is complete — there is no current step.');
       return;
     }
+    setBusy('ask-step');
     try {
       setAnswer(await vision.ask(text, step));
     } catch (error) {
       setAnswer(`Could not answer: ${errorMessage(error)}`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -286,6 +314,7 @@ export default function ProjectScreen() {
   };
 
   const buildPovTimelapse = async () => {
+    if (busy) return;
     const jobs = createVideoJobs();
     if (povClips.length === 0) {
       setPovStatus('Record at least one POV clip first.');
@@ -297,6 +326,7 @@ export default function ProjectScreen() {
       );
       return;
     }
+    setBusy('timelapse');
     try {
       setPovStatus('Building POV timelapse on the server…');
       const items: TimelapseItem[] = [];
@@ -337,6 +367,8 @@ export default function ProjectScreen() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setPovStatus(`Timelapse failed (${message}) — slideshow fallback.`);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -366,34 +398,48 @@ export default function ProjectScreen() {
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.heading}>
-        {session ? session.plan.title : 'IKEA-style guided build'}
-      </Text>
-      <Text style={styles.sub}>{status}</Text>
+    <ScreenBoundary>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.keyboard}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <ScrollView
+            contentContainerStyle={styles.container}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.heading}>
+              {session ? session.plan.title : 'IKEA-style guided build'}
+            </Text>
+            <Text style={styles.sub}>{status}</Text>
 
-      {permission?.granted ? (
-        <CameraView
-          ref={cameraRef}
-          style={styles.camera}
-          facing="back"
-          pictureSize={pictureSize}
-          onCameraReady={onCameraReady}
-        />
-      ) : (
-        <View style={styles.cameraPlaceholder}>
-          <Text style={styles.placeholderText}>
-            No camera yet — Project mode runs in simulation.
-          </Text>
-          <Button title="Grant camera permission" onPress={requestPermission} />
-        </View>
-      )}
+            {permission?.granted ? (
+              <CameraView
+                ref={cameraRef}
+                style={styles.camera}
+                facing="back"
+                pictureSize={pictureSize}
+                onCameraReady={onCameraReady}
+              />
+            ) : (
+              <View style={styles.cameraPlaceholder}>
+                <Text style={styles.placeholderText}>
+                  No camera yet — Project mode runs in simulation.
+                </Text>
+                <UIButton
+                  title="Grant camera permission"
+                  variant="secondary"
+                  onPress={() => void requestPermission()}
+                />
+              </View>
+            )}
 
-      <Button
-        title="Photograph instruction sheet"
-        disabled={parsing}
-        onPress={() => void photographSheet()}
-      />
+            <UIButton
+              title="Photograph instruction sheet"
+              loading={parsing}
+              disabled={parsing || watching || busy !== null}
+              onPress={() => void photographSheet()}
+            />
 
       {session && step ? (
         <View style={styles.card}>
@@ -409,7 +455,7 @@ export default function ProjectScreen() {
             ))}
           </View>
           <Text style={styles.instruction}>{step.instruction}</Text>
-          {model && model.parts.length > 0 ? (
+          {tabFocused && model && model.parts.length > 0 ? (
             <StepModelView model={model} />
           ) : null}
           <Text style={styles.hint}>
@@ -423,7 +469,7 @@ export default function ProjectScreen() {
           <Text style={styles.instruction}>
             Nice work — the build is finished.
           </Text>
-          {model && model.parts.length > 0 ? (
+          {tabFocused && model && model.parts.length > 0 ? (
             <StepModelView model={model} />
           ) : null}
           <Text style={styles.hint}>
@@ -461,84 +507,112 @@ export default function ProjectScreen() {
       ) : null}
 
       <View style={styles.nav}>
-        <Button
-          title="Back"
-          disabled={
-            watching ||
-            !session ||
-            (session.currentStep === 0 && !isDone)
-          }
-          onPress={goPrev}
-        />
-        <Button
-          title={isDone ? 'Done' : 'Next step'}
-          disabled={!session || isDone}
-          onPress={goNext}
-        />
+        <View style={styles.navButton}>
+          <UIButton
+            title="Back"
+            variant="secondary"
+            disabled={
+              watching ||
+              !session ||
+              (session.currentStep === 0 && !isDone)
+            }
+            onPress={goPrev}
+          />
+        </View>
+        <View style={styles.navButton}>
+          <UIButton
+            title={isDone ? 'Done' : 'Next step'}
+            variant="secondary"
+            disabled={!session || isDone}
+            onPress={goNext}
+          />
+        </View>
       </View>
 
-      <Pressable
-        style={[styles.watchButton, watching && styles.watchButtonStop]}
+      <UIButton
+        title={watching ? 'Stop watching' : 'Watch my build'}
+        variant={watching ? 'danger' : 'primary'}
         disabled={!session || isDone}
         onPress={watching ? stopWatching : startWatching}
-      >
-        <Text style={styles.watchButtonText}>
-          {watching ? 'Stop watching' : 'Watch my build'}
-        </Text>
-      </Pressable>
+      />
 
-      <Text style={styles.label}>Find a part</Text>
-      <View style={styles.row}>
+      <Section title="Find a part">
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.flex]}
+            placeholder="e.g. screw, cable tray"
+            value={partQuery}
+            onChangeText={setPartQuery}
+            returnKeyType="search"
+            onSubmitEditing={() => void findPart()}
+          />
+          <UIButton
+            title="Find"
+            variant="secondary"
+            loading={busy === 'find'}
+            disabled={busy !== null}
+            onPress={() => void findPart()}
+          />
+        </View>
+        {partResult ? <Text style={styles.answer}>{partResult}</Text> : null}
+      </Section>
+
+      <Section title="Ask about this step">
         <TextInput
-          style={[styles.input, styles.flex]}
-          placeholder="e.g. screw, cable tray"
-          value={partQuery}
-          onChangeText={setPartQuery}
+          style={styles.input}
+          placeholder="e.g. Which screw goes here?"
+          value={question}
+          onChangeText={setQuestion}
+          returnKeyType="send"
+          onSubmitEditing={() => void askQuestion()}
         />
-        <Button title="Find" onPress={() => void findPart()} />
-      </View>
-      {partResult ? <Text style={styles.answer}>{partResult}</Text> : null}
+        <UIButton
+          title="Ask"
+          loading={busy === 'ask-step'}
+          disabled={busy !== null}
+          onPress={() => void askQuestion()}
+        />
+        {answer ? <Text style={styles.answer}>{answer}</Text> : null}
+      </Section>
 
-      <Text style={styles.label}>Ask about this step</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. Which screw goes here?"
-        value={question}
-        onChangeText={setQuestion}
-      />
-      <Pressable style={styles.askButton} onPress={() => void askQuestion()}>
-        <Text style={styles.askButtonText}>Ask</Text>
-      </Pressable>
-      {answer ? <Text style={styles.answer}>{answer}</Text> : null}
-
-      <Text style={styles.label}>POV build recap</Text>
-      <Text style={styles.hint}>
-        Record POV clips while you build, then stitch clips + today’s
-        photos into a timelapse (server) or slideshow.
-      </Text>
-      <Pressable
-        style={[styles.watchButton, povRecording && styles.watchButtonStop]}
-        disabled={!session}
-        onPress={togglePovRecord}
+      <Section
+        title="POV build recap"
+        hint="Record POV clips while you build, then stitch clips + today’s photos into a timelapse (server) or slideshow."
       >
-        <Text style={styles.watchButtonText}>
-          {povRecording ? 'Stop POV clip' : 'Record POV clip'}
-        </Text>
-      </Pressable>
-      <Text style={styles.hint}>{povClips.length} POV clips recorded</Text>
-      <Button
-        title="Build POV timelapse"
-        disabled={povClips.length === 0}
-        onPress={() => void buildPovTimelapse()}
-      />
-      {povStatus ? <Text style={styles.answer}>{povStatus}</Text> : null}
-      {povVideoUri ? <VideoPlayer uri={povVideoUri} /> : null}
-    </ScrollView>
+        <UIButton
+          title={povRecording ? 'Stop POV clip' : 'Record POV clip'}
+          variant={povRecording ? 'danger' : 'primary'}
+          disabled={!session}
+          onPress={togglePovRecord}
+        />
+        <Text style={styles.hint}>{povClips.length} POV clips recorded</Text>
+        <UIButton
+          title="Build POV timelapse"
+          variant="secondary"
+          loading={busy === 'timelapse'}
+          disabled={povClips.length === 0 || busy !== null}
+          onPress={() => void buildPovTimelapse()}
+        />
+        {povStatus ? <Text style={styles.answer}>{povStatus}</Text> : null}
+        {povVideoUri ? <VideoPlayer uri={povVideoUri} /> : null}
+      </Section>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </ScreenBoundary>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, gap: 12 },
+  safe: { flex: 1 },
+  keyboard: { flex: 1 },
+  container: {
+    padding: 16,
+    gap: 12,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+  },
   heading: { fontSize: 22, fontWeight: '700' },
   sub: { color: '#555' },
   camera: { height: 240, borderRadius: 12, overflow: 'hidden' },
@@ -571,7 +645,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   instruction: { fontSize: 16, lineHeight: 22 },
-  hint: { color: '#666', fontSize: 13 },
+  hint: { color: '#5f6368', fontSize: 13 },
   banner: { borderRadius: 8, padding: 10, gap: 4 },
   bannerComplete: { backgroundColor: '#e6f4ea' },
   bannerTextComplete: { color: '#137333', fontWeight: '600' },
@@ -579,16 +653,8 @@ const styles = StyleSheet.create({
   bannerTextMistake: { color: '#8a1010', fontWeight: '600' },
   bannerUnclear: { backgroundColor: '#fff4d6' },
   bannerTextUnclear: { color: '#7a5200', fontWeight: '600' },
-  nav: { flexDirection: 'row', justifyContent: 'space-between' },
-  watchButton: {
-    backgroundColor: '#0a6cff',
-    borderRadius: 10,
-    padding: 14,
-    alignItems: 'center',
-  },
-  watchButtonStop: { backgroundColor: '#c62828' },
-  watchButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  label: { fontWeight: '600', marginTop: 8 },
+  nav: { flexDirection: 'row', gap: 8 },
+  navButton: { flex: 1 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   flex: { flex: 1 },
   input: {
@@ -598,13 +664,6 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#fff',
   },
-  askButton: {
-    backgroundColor: '#0a6cff',
-    borderRadius: 8,
-    padding: 12,
-    alignItems: 'center',
-  },
-  askButtonText: { color: '#fff', fontWeight: '700' },
   answer: { backgroundColor: '#f2f7ff', borderRadius: 8, padding: 10 },
 });
 
