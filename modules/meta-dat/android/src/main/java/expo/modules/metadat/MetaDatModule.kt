@@ -42,15 +42,17 @@ class MetaDatModule : Module() {
       emptyList<Map<String, Any>>()
     }
 
+    // Throwing bodies delegate to Unit helpers: a bare `throw` infers a
+    // Nothing return type, which AsyncFunction's reified generic rejects.
     AsyncFunction("startSession") { deviceId: String ->
-      throw DatNotWiredException("Device sessions require paired glasses on device.")
+      failSession(deviceId)
     }
 
     AsyncFunction("startCameraStream") { config: Map<String, Any> ->
       // session.addCamera(StreamConfiguration(VideoQuality.MEDIUM, fps))
       //   -> camera.stream.videoStream.collect { frame -> ... }
       // VERIFY-IN-ANDROID-STUDIO: frame -> JPEG bytes accessor.
-      throw DatNotWiredException("Camera streaming requires paired glasses on device.")
+      failStream(config)
     }
 
     AsyncFunction("stopCameraStream") {
@@ -63,7 +65,7 @@ class MetaDatModule : Module() {
     }
 
     AsyncFunction("showText") { lines: List<String> ->
-      throw DatNotWiredException("Display bridge is wired in JS; native views land on device.")
+      failShowText(lines)
     }
 
     AsyncFunction("startSpeech") {
@@ -74,6 +76,18 @@ class MetaDatModule : Module() {
     AsyncFunction("getDeviceState") {
       mapOf<String, Any?>("batteryPercent" to null, "connected" to false)
     }
+  }
+
+  private fun failSession(_deviceId: String) {
+    throw DatNotWiredException("Device sessions require paired glasses on device.")
+  }
+
+  private fun failStream(_config: Map<String, Any>) {
+    throw DatNotWiredException("Camera streaming requires paired glasses on device.")
+  }
+
+  private fun failShowText(_lines: List<String>) {
+    throw DatNotWiredException("Display bridge is wired in JS; native views land on device.")
   }
 }
 
