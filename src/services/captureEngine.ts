@@ -14,6 +14,8 @@ export interface CaptureCallbacks {
   onAlert?: (alert: ScenarioAlert) => void;
   onStopped?: (reason: StopReason, detail?: string) => void;
   onError?: (message: string) => void;
+  /** A frame was discarded for merely mentioning a private place. */
+  onPrivacySkip?: (reason: string) => void;
 }
 
 export interface CaptureEngineOptions {
@@ -82,13 +84,21 @@ export class CaptureEngine {
         const event = await insertEvent({
           ts: now,
           kind: 'privacy-stop',
-          caption: 'Capture stopped — private scene detected. No photo kept.',
+          caption:
+            `Capture stopped — private scene detected ` +
+            `(${privacy.reason ?? 'privacy tag'}). No photo kept.`,
           objects: [],
           tags: [],
           photoUri: null,
         });
         this.opts.callbacks?.onEvent?.(event);
         this.stop('privacy', privacy.reason ?? undefined);
+        return;
+      }
+      if (privacy.mention) {
+        // Merely mentioned, not the scene: drop the frame, keep watching.
+        if (photoUri) deletePhoto(photoUri);
+        this.opts.callbacks?.onPrivacySkip?.(privacy.mention);
         return;
       }
 

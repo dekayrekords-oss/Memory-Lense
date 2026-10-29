@@ -250,11 +250,19 @@ export default function MemoryScreen() {
           // Mirror onto the glasses display when Meta is the source.
           void metaService.showText([alert.message]).catch(() => {});
         },
+        onPrivacySkip: (reason) => {
+          setStatus(
+            `Still watching — skipped a frame (${reason}); its photo was deleted.`,
+          );
+        },
         onStopped: (reason, detail) => {
           setRunning(false);
           deactivateKeepAwake();
           if (reason === 'privacy') {
-            setStatus('Stopped: private scene detected. Capture is off.');
+            setStatus(
+              `Stopped: private scene detected (${detail ?? 'privacy tag'}). ` +
+                'Point the camera elsewhere, then Start watching.',
+            );
           } else if (reason === 'error') {
             setStatus(`Stopped after an error: ${detail ?? 'unknown'}`);
           } else {

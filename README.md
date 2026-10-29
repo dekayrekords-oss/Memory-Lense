@@ -24,7 +24,7 @@ npx expo start       # then open the dev build and scan the QR code
 npx expo run:ios     # or: npx expo run:android
 ```
 
-Checks: `npm test` (178 tests, 21 suites) · `npx tsc --noEmit` · `npx eslint .` ·
+Checks: `npm test` (180 tests, 21 suites) · `npx tsc --noEmit` · `npx eslint .` ·
 `npx expo-doctor` · `npx expo export --platform android --platform ios` ·
 `node --check server/vision-server.mjs`.
 
@@ -69,8 +69,12 @@ Checks: `npm test` (178 tests, 21 suites) · `npx tsc --noEmit` · `npx eslint .
 - **Photo discipline** — important frames keep the photo; everything else is
   stored as a text interpretation and the photo is deleted; duplicate scenes
   are deleted outright.
-- **Privacy hard-stop** — if a restroom or nudity is detected, capture stops
-  immediately and no photo from that frame is ever kept.
+- **Privacy hard-stop** — if a restroom or nudity is detected (scene tags,
+  or a nudity word describing the scene), capture stops immediately and
+  no photo from that frame is ever kept; the stop names its trigger. A
+  private place merely *mentioned* in a caption ("toilet paper on the
+  counter") never stops capture: that frame is discarded and watching
+  continues.
 
 Vision runs on a deterministic offline mock until you connect the real
 backend. Try the demo first: start watching and it will find keys, suppress
