@@ -23,3 +23,28 @@ export function formatInterval(seconds: number): string {
   const rest = s % 60;
   return rest === 0 ? `${m}m` : `${m}m ${rest}s`;
 }
+
+// Photo size for analysis: the smallest the camera offers that still
+// carries readable text and detail for a vision model (≈720p). Smaller
+// is not cheaper in any way that matters once the model can't read the
+// frame. When nothing reaches the floor, take the largest available.
+export const MIN_ANALYZABLE_WIDTH = 1280;
+export const MIN_ANALYZABLE_HEIGHT = 720;
+
+export function pickPictureSize(sizes: string[]): string | undefined {
+  const parsed = sizes
+    .map((raw) => {
+      const [w, h] = raw.split('x').map((v) => parseInt(v, 10));
+      return { raw, w, h, area: (w || 0) * (h || 0) };
+    })
+    .filter((s) => Number.isFinite(s.w) && Number.isFinite(s.h) && s.area > 0);
+  if (parsed.length === 0) return undefined;
+  const adequate = parsed.filter(
+    (s) => s.w >= MIN_ANALYZABLE_WIDTH && s.h >= MIN_ANALYZABLE_HEIGHT,
+  );
+  const pool =
+    adequate.length > 0
+      ? adequate.sort((a, b) => a.area - b.area)
+      : parsed.sort((a, b) => b.area - a.area);
+  return pool[0].raw;
+}

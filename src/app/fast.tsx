@@ -30,7 +30,14 @@ import {
   RingBuffer,
   type StreamSocket,
 } from '@/services/frameStream';
+import { pickPictureSize } from '@/services/config';
 import { deletePhoto } from '@/services/photoFiles';
+import {
+  getSettings,
+  loadSettings,
+  subscribeSettings,
+  type AppSettings,
+} from '@/services/settings';
 import type { CaptureSource } from '@/services/types';
 import { createClipVision } from '@/services/vision/clipVision';
 import { createVisionProvider } from '@/services/vision/provider';
@@ -143,8 +150,38 @@ export default function FastCaptureScreen() {
   const triggerRef = useRef(new FrameTrigger(DEFAULT_TRIGGER_CONFIG));
   const pendingRef = useRef<{ ts: number; peak: number; thumbUri: string | null } | null>(null);
   const simTickRef = useRef(0);
-  const [vision] = useState(() => createVisionProvider());
-  const [clipVision] = useState(() => createClipVision());
+  const [vision, setVision] = useState(() => createVisionProvider());
+  const [clipVision, setClipVision] = useState(() => createClipVision());
+  const [appSettings, setAppSettings] = useState<AppSettings>(() =>
+    getSettings(),
+  );
+  const [pictureSize, setPictureSize] = useState<string | undefined>();
+
+  useEffect(() => {
+    let live = true;
+    const apply = (loaded: AppSettings) => {
+      if (!live) return;
+      setAppSettings(loaded);
+      setVision(createVisionProvider(loaded.visionApiUrl));
+      setClipVision(createClipVision({ endpoint: loaded.visionApiUrl }));
+    };
+    void loadSettings().then(apply);
+    const unsubscribe = subscribeSettings(apply);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const onCameraReady = async () => {
+    try {
+      const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
+      if (!sizes || sizes.length === 0) return;
+      setPictureSize(pickPictureSize(sizes));
+    } catch {
+      // Keep the default picture size.
+    }
+  };
 
   const fetchFrameBytes = useCallback(async (): Promise<{ bytes: Uint8Array; uri: string | null }> => {
     if (sourceKind === 'simulation') {
@@ -442,7 +479,14 @@ export default function FastCaptureScreen() {
             </Section>
 
             {sourceKind === 'phone' && permission?.granted ? (
-              <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+              <CameraView
+                ref={cameraRef}
+                style={styles.camera}
+                facing="back"
+                mute={appSettings.muteCameraSounds}
+                pictureSize={pictureSize}
+                onCameraReady={onCameraReady}
+              />
             ) : sourceKind === 'phone' ? (
               <View style={styles.cameraPlaceholder}>
                 <Text style={styles.placeholderText}>

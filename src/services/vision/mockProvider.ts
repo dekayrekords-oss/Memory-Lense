@@ -54,10 +54,22 @@ const SCRIPT: VisionResult[] = [
   },
 ];
 
+// What a real photo gets with no backend connected: an honest
+// "not analyzed" frame. The scripted demo day only plays for
+// simulated frames — feeding it real photos invented sightings
+// (and a restroom scene) that were never in front of the camera.
+const UNANALYZED: VisionResult = {
+  caption: 'Frame captured — vision backend not connected',
+  objects: [],
+  tags: ['unanalyzed'],
+  importance: 0.05,
+};
+
 export class MockVisionProvider implements VisionProvider {
   private index = 0;
 
-  async analyze(_photoUri: string | null): Promise<VisionResult> {
+  async analyze(photoUri: string | null): Promise<VisionResult> {
+    if (photoUri) return { ...UNANALYZED };
     const result = SCRIPT[this.index % SCRIPT.length];
     this.index += 1;
     return result;

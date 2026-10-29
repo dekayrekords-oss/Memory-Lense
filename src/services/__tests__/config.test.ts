@@ -4,6 +4,7 @@ import {
   DEFAULT_INTERVAL_SECONDS,
   MAX_INTERVAL_SECONDS,
   MIN_INTERVAL_SECONDS,
+  pickPictureSize,
 } from '../config';
 
 describe('clampIntervalSeconds', () => {
@@ -26,5 +27,22 @@ describe('clampIntervalSeconds', () => {
 
   it('falls back to the default for non-finite input', () => {
     expect(clampIntervalSeconds(Number.NaN)).toBe(DEFAULT_INTERVAL_SECONDS);
+  });
+});
+
+describe('pickPictureSize', () => {
+  it('picks the smallest size that still reads text (≈720p floor)', () => {
+    expect(
+      pickPictureSize(['4032x3024', '1920x1080', '1280x720', '640x480']),
+    ).toBe('1280x720');
+  });
+
+  it('takes the largest available when nothing reaches the floor', () => {
+    expect(pickPictureSize(['640x480', '1024x768'])).toBe('1024x768');
+  });
+
+  it('returns undefined for no usable sizes', () => {
+    expect(pickPictureSize([])).toBeUndefined();
+    expect(pickPictureSize(['unknown'])).toBeUndefined();
   });
 });

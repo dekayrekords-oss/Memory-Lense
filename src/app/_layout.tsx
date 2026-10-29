@@ -51,6 +51,19 @@ export default function RootLayout() {
             ),
           }}
         />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title: 'Settings',
+            tabBarIcon: ({ color, size, focused }) => (
+              <Ionicons
+                name={focused ? 'settings' : 'settings-outline'}
+                size={size}
+                color={color as string}
+              />
+            ),
+          }}
+        />
       </Tabs>
     </>
   );

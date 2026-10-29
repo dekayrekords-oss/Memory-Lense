@@ -28,7 +28,14 @@ import {
   stepProgress,
   type ProjectSessionState,
 } from '@/services/projectSession';
+import { pickPictureSize } from '@/services/config';
 import { answerWhere } from '@/services/scenarios';
+import {
+  getSettings,
+  loadSettings,
+  subscribeSettings,
+  type AppSettings,
+} from '@/services/settings';
 import { buildStepModel } from '@/services/stepModel';
 import {
   base64ToBytes,
@@ -54,7 +61,28 @@ export default function ProjectScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [pictureSize, setPictureSize] = useState<string | undefined>();
 
-  const [vision] = useState<ProjectVision>(() => createProjectVision());
+  const [vision, setVision] = useState<ProjectVision>(() =>
+    createProjectVision(),
+  );
+  const [appSettings, setAppSettings] = useState<AppSettings>(() =>
+    getSettings(),
+  );
+  useEffect(() => {
+    let live = true;
+    void loadSettings().then((loaded) => {
+      if (!live) return;
+      setAppSettings(loaded);
+      setVision(createProjectVision({ endpoint: loaded.visionApiUrl }));
+    });
+    const unsubscribe = subscribeSettings((next) => {
+      setAppSettings(next);
+      setVision(createProjectVision({ endpoint: next.visionApiUrl }));
+    });
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
   const [session, setSession] = useState<ProjectSessionState | null>(null);
   const [status, setStatus] = useState(
     'Loading project. Simulation runs without a camera.',
@@ -376,13 +404,8 @@ export default function ProjectScreen() {
     try {
       const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
       if (!sizes || sizes.length === 0) return;
-      // Lowest resolution that still carries detail — smallest pixel count.
-      const smallest = [...sizes].sort((a, b) => {
-        const pa = a.split('x').reduce((n, v) => n * (parseInt(v, 10) || 0), 1);
-        const pb = b.split('x').reduce((n, v) => n * (parseInt(v, 10) || 0), 1);
-        return pa - pb;
-      })[0];
-      setPictureSize(smallest);
+      // Lowest resolution that still lets the model read text/detail.
+      setPictureSize(pickPictureSize(sizes));
     } catch {
       // Keep the default picture size.
     }
@@ -418,6 +441,7 @@ export default function ProjectScreen() {
                 ref={cameraRef}
                 style={styles.camera}
                 facing="back"
+                mute={appSettings.muteCameraSounds}
                 pictureSize={pictureSize}
                 onCameraReady={onCameraReady}
               />

@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { MockVisionProvider } from '../vision/mockProvider';
 import { HttpVisionProvider } from '../vision/provider';
 
 const RESULT = {
@@ -56,5 +57,26 @@ describe('HttpVisionProvider', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe('MockVisionProvider', () => {
+  it('never invents sightings (or privacy scenes) for real photos', async () => {
+    const provider = new MockVisionProvider();
+    for (let i = 0; i < 10; i += 1) {
+      const result = await provider.analyze('file:///cache/photo.jpg');
+      expect(result.objects).toEqual([]);
+      expect(result.tags).not.toContain('restroom');
+      expect(result.caption).toContain('not connected');
+    }
+  });
+
+  it('still plays the scripted demo day for simulated frames', async () => {
+    const provider = new MockVisionProvider();
+    const captions: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      captions.push((await provider.analyze(null)).caption);
+    }
+    expect(captions).toContain('Keys on the dining table');
   });
 });

@@ -28,6 +28,7 @@ import UIButton from '@/components/UIButton';
 import {
   formatInterval,
   INTERVAL_PRESETS_SECONDS,
+  pickPictureSize,
 } from '@/services/config';
 import VideoPlayer from '@/components/VideoPlayer';
 import { CaptureEngine } from '@/services/captureEngine';
@@ -61,6 +62,12 @@ import {
   checklistProgress,
   scenarioDisplayName,
 } from '@/services/scenarios';
+import {
+  getSettings,
+  loadSettings,
+  subscribeSettings,
+  type AppSettings,
+} from '@/services/settings';
 import { createTranscriber } from '@/services/transcribe';
 import { base64ToBytes, createVideoJobs } from '@/services/videoJobs';
 import {
@@ -161,6 +168,25 @@ export default function MemoryScreen() {
   }, [scenarios]);
   const engineRef = useRef<CaptureEngine | null>(null);
 
+  const [appSettings, setAppSettings] = useState<AppSettings>(() =>
+    getSettings(),
+  );
+  useEffect(() => {
+    let live = true;
+    void loadSettings().then((loaded) => {
+      if (!live) return;
+      setAppSettings(loaded);
+      setIntervalSeconds(loaded.captureIntervalSeconds);
+    });
+    const unsubscribe = subscribeSettings(setAppSettings);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+  const visionEndpoint = appSettings.visionApiUrl;
+  const demoVision = visionEndpoint.trim() === '';
+
   const takePhoto = useCallback(async (): Promise<string | null> => {
     if (!permission?.granted || !cameraRef.current) return null;
     try {
@@ -172,9 +198,18 @@ export default function MemoryScreen() {
   }, [permission?.granted]);
 
   const metaService = useMemo(() => createEyewearMeta(), []);
-  const transcriber = useMemo(() => createTranscriber(), []);
-  const recapService = useMemo(() => createRecap(), []);
-  const videoJobs = useMemo(() => createVideoJobs(), []);
+  const transcriber = useMemo(
+    () => createTranscriber(visionEndpoint),
+    [visionEndpoint],
+  );
+  const recapService = useMemo(
+    () => createRecap(visionEndpoint),
+    [visionEndpoint],
+  );
+  const videoJobs = useMemo(
+    () => createVideoJobs(visionEndpoint),
+    [visionEndpoint],
+  );
 
   useEffect(() => {
     // Built in an effect: the phone adapter wraps a ref-reading callback,
@@ -204,7 +239,7 @@ export default function MemoryScreen() {
       });
     }
     const engine = new CaptureEngine({
-      vision: createVisionProvider(),
+      vision: createVisionProvider(visionEndpoint),
       takePhoto: adapter.takePhoto,
       getScenarios: () => scenariosRef.current,
       callbacks: {
@@ -236,7 +271,7 @@ export default function MemoryScreen() {
       deactivateKeepAwake();
       void adapter.stop?.().catch(() => {});
     };
-  }, [sourceKind, engineFrameUrl, takePhoto, metaService]);
+  }, [sourceKind, engineFrameUrl, takePhoto, metaService, visionEndpoint]);
 
   const toggleCapture = () => {
     const engine = engineRef.current;
@@ -556,13 +591,8 @@ export default function MemoryScreen() {
     try {
       const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
       if (!sizes || sizes.length === 0) return;
-      // Lowest resolution that still carries detail — smallest pixel count.
-      const smallest = [...sizes].sort((a, b) => {
-        const pa = a.split('x').reduce((n, v) => n * (parseInt(v, 10) || 0), 1);
-        const pb = b.split('x').reduce((n, v) => n * (parseInt(v, 10) || 0), 1);
-        return pa - pb;
-      })[0];
-      setPictureSize(smallest);
+      // Lowest resolution that still lets the model read text/detail.
+      setPictureSize(pickPictureSize(sizes));
     } catch {
       // Keep the default picture size.
     }
@@ -673,11 +703,19 @@ export default function MemoryScreen() {
               ) : null}
             </Section>
 
+      {demoVision ? (
+        <Text style={styles.sub}>
+          Offline demo vision — real photos are not analyzed. Connect a
+          backend in the Settings tab for find/watch, exit alerts, and
+          privacy screening. (Simulation always runs the demo.)
+        </Text>
+      ) : null}
       {sourceKind === 'phone' && permission?.granted ? (
         <CameraView
           ref={cameraRef}
           style={styles.camera}
           facing="back"
+          mute={appSettings.muteCameraSounds}
           pictureSize={pictureSize}
           onCameraReady={onCameraReady}
         />

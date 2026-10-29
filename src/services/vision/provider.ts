@@ -53,8 +53,10 @@ export class HttpVisionProvider implements VisionProvider {
   }
 }
 
-export function createVisionProvider(): VisionProvider {
-  const endpoint = process.env.EXPO_PUBLIC_VISION_API_URL;
-  if (endpoint) return new HttpVisionProvider(endpoint);
+export function createVisionProvider(
+  endpoint: string = process.env.EXPO_PUBLIC_VISION_API_URL ?? '',
+): VisionProvider {
+  const url = endpoint.trim();
+  if (url) return new HttpVisionProvider(url);
   return new MockVisionProvider();
 }

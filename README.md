@@ -24,7 +24,7 @@ npx expo start       # then open the dev build and scan the QR code
 npx expo run:ios     # or: npx expo run:android
 ```
 
-Checks: `npm test` (169 tests, 20 suites) · `npx tsc --noEmit` · `npx eslint .` ·
+Checks: `npm test` (178 tests, 21 suites) · `npx tsc --noEmit` · `npx eslint .` ·
 `npx expo-doctor` · `npx expo export --platform android --platform ios` ·
 `node --check server/vision-server.mjs`.
 
@@ -131,7 +131,7 @@ Live guided-build flow (`src/app/project.tsx` +
 
 ## Layout
 
-- `src/app/` — tabs: Memory (`index`), Project, Fast Capture
+- `src/app/` — tabs: Memory (`index`), Project, Fast Capture, Settings
 - `src/services/captureEngine.ts` — photo → privacy gate → triage → store → rules
 - `src/services/privacy.ts` — restroom/nudity shutoff (runs first, absolute)
 - `src/services/triage.ts` — keep / text-only / delete decisions + dedupe
