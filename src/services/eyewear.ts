@@ -113,6 +113,10 @@ export function createMetaFrameSource(
       if (started) return;
       started = true;
       await meta.configure();
+      // The native stream needs a device session first: connect to the
+      // first registered glasses (the DAT auto-selector picks the pair).
+      const devices = await meta.listDevices();
+      await meta.connect(devices[0]?.id ?? '');
       await meta.startCameraStream({ fps: 7, resolution: 'medium' }, (bytes) => {
         latest = { bytes, ts: Date.now() };
       });

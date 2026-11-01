@@ -159,7 +159,9 @@ Live guided-build flow (`src/app/project.tsx` +
 - `src/services/micCapture.ts` — mic-only voice notes + ambient sampling
 - `src/services/recap.ts` — end-of-day/week recaps (AI + local)
 - `src/services/videoJobs.ts` — cartoon montage + POV timelapse client
-- `modules/meta-dat/` — native DAT module (Swift/Kotlin) + setup README
+- `modules/meta-dat/` — native DAT module: Android = real Wearables DAT SDK
+  (device-verified to `NO_ELIGIBLE_DEVICE`); iOS = Swift bridge + manual SPM
+  step, both documented in its setup README
 - `plugins/withMetaDat.js` — DAT app ID/token/manifest config plugin
 
 ## What Fast Capture does today

@@ -53,6 +53,17 @@ const fakeMeta = (frames: Uint8Array[]): MetaDatService => ({
 });
 
 describe('createMetaFrameSource', () => {
+  it('connects to the first device before streaming', async () => {
+    const meta = fakeMeta([]);
+    const connect = jest.fn(meta.connect);
+    const source = createMetaFrameSource(
+      { ...meta, connect },
+      { writeFrame: async () => 'file:///x.jpg' },
+    );
+    await source.start?.();
+    expect(connect).toHaveBeenCalledWith('d1');
+  });
+
   it('serves the latest streamed frame as a photo file', async () => {
     const writeFrame = jest.fn(
       async (_b: Uint8Array, _ts: number) => 'file:///cache/frames/m.jpg',

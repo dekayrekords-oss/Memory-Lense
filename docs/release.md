@@ -85,7 +85,11 @@ unreliable for the 3D preview):
 
 ## 6. Known pre-submission gaps
 
-- Meta native accessors marked VERIFY-IN-XCODE /
-  VERIFY-IN-ANDROID-STUDIO must compile before the first device build.
+- Meta DAT (Android): module compiled, linked, and initialized on
+  device (session attempt ends at `NO_ELIGIBLE_DEVICE` without
+  registered glasses). Remaining hardware checks: raw frame pixel
+  format (NV21 assumed in the converter), photo byte format, and a
+  live stream against paired glasses with a console app ID. iOS:
+  Swift bridge compiles only after the manual Xcode SPM step above.
 - `ffmpeg` must exist on the vision server for montage/timelapse MP4s.
 - Live AI paths need `VISION_API_KEY` (+ `TRANSCRIBE_MODEL` for mic).

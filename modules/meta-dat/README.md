@@ -26,9 +26,26 @@ speech, inputs, motion, device state); this package is the native half.
 
 ## Verification status
 
-Written against Meta's published integration/streaming/capture guides
-(Oct 2026). Two accessors are marked `VERIFY-IN-XCODE` /
-`VERIFY-IN-ANDROID-STUDIO` (frame/photo image extraction). Nothing here
-has been compiled: this environment has no Xcode/Android Studio, no
-Meta console project, and no glasses. Use Meta's Mock Device Kit to
-develop without hardware once the module builds.
+**Android: incorporated and device-verified up to the hardware
+boundary.** The Kotlin module calls the real DAT 1.0.1 API
+(`Wearables.initialize` once per process, `checkPermissionStatus`,
+`createSession(AutoDeviceSelector)`, `session.addCamera` video
+streams converted to JPEG, photo captures, lens display text). It
+compiles (`:meta-dat:compileDebugKotlin`), links into the release
+APK, and on a real phone the SDK initializes and a session attempt
+ends at `NO_ELIGIBLE_DEVICE` — the exact expected state with no
+registered glasses. The JS eyewear Meta source now connects (first
+device) before streaming.
+
+**Still required for a live stream:** a Meta Wearables console app
+ID in `app.json → extra.metaDat` (or developer-mode glasses), a
+paired device, and one hardware check — raw frame pixel format is
+converted assuming NV21; if firmware sends another layout, only the
+converter in `MetaDatModule.kt` changes.
+
+**iOS:** the config plugin writes the Info.plist keys (verified via
+`expo prebuild --platform ios`). The DAT Swift Package must still be
+added in Xcode (File → Add Package Dependencies →
+`github.com/facebook/meta-wearables-dat-ios`, products `MWDATCore` +
+`MWDATCamera`) — CocoaPods cannot consume it, and the Swift bridge
+compiles only after that step.
