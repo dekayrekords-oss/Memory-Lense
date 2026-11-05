@@ -1,0 +1,85 @@
+{
+  "expo": {
+    "name": "memory-lens",
+    "slug": "memory-lens",
+    "scheme": "memory-lens",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.memorylens.app",
+      "infoPlist": {
+        "NSAllowsLocalNetworking": true
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.memorylens.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Memory Lens uses the camera to remember where things are and watch for what you asked it to track.",
+          "microphonePermission": "Memory Lens uses the microphone for voice notes, ambient listening, and POV clip audio."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "enableRemoteNotifications": false,
+          "color": "#0a6cff"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "minSdkVersion": 29,
+            "enableMinifyInReleaseBuilds": false,
+            "enableShrinkResourcesInReleaseBuilds": false
+          }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#E6F4FE"
+        }
+      ],
+      "expo-asset",
+      "expo-audio",
+      "expo-video",
+      "./plugins/withMetaDat.js",
+      "expo-secure-store"
+    ],
+    "extra": {
+      "metaDat": {
+        "appId": "",
+        "clientToken": "",
+        "appLinkURLScheme": "memorylens",
+        "associatedDomain": ""
+      }
+    }
+  }
+}
