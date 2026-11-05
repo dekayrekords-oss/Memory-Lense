@@ -1,0 +1,177 @@
+Memory Lens | Development transcript reference
+
+Selected excerpts from the supplied development transcript. Source line numbers
+refer to that transcript. Console formatting was removed. Private operational
+details, account and device information, raw camera observations, and unrelated
+material were omitted. These excerpts describe the design and development at
+the time they were written. See the repository README for current behavior.
+
+Product overview
+----------------
+
+[Source lines 11538-11540]
+Memory Lens is a phone app that watches the world through a camera — your phone's, or a pair of Ray-Ban Meta smart
+glasses — and quietly remembers what it saw, so you don't have to. It answers "where are my keys?", warns you before
+you walk out without something, and talks you through building things step by step, checking your work as you go.
+
+[Source lines 11547-11549]
+Project — A patient building coach. Photograph an instruction sheet (or scan its QR code) and it breaks the page into
+steps, then watches you work and speaks up: "Step done. Next: fold the top left corner" — or "Careful, that fold looks
+wrong."
+
+[Source line 11553]
+Settings — Your AI key, free model choices, light/dark themes, storage and privacy controls.
+
+App architecture
+----------------
+
+[Source line 16]
+It's an Expo (React Native SDK 58) phone-first memory assistant:
+
+[Source lines 32-33]
+Core services in memory-lens/src/services: capture engine, privacy hard-stop, triage, scenarios, SQLite memory store,
+project session, Fast Capture, vision providers.
+
+Object memory, checklists, and retention
+----------------------------------------
+
+[Source lines 83-91]
+Watch-for rules from the product spec:
+- "remember-object": passively track where an object was last seen
+- "exit-check": alert when the user leaves without a required object
+("don't let me forget my keys before leaving the house")
+- "requirement": generalized exit-check — the requirement may be an
+object ("keys") or an action ("brushed teeth"); vision tags count
+as evidence for actions, object sightings for things
+- "checklist": named item lists (gig kit, groceries); items check off
+when seen, and leaving/checkout without an item alerts
+
+[Source lines 629-633]
+• Requirements & checklists UI — "Don't leave before…" (action evidence via vision tags), named checklists with
+comma-separated items, and live per-item progress (○ seen / ✅ packed).
+• Retention controls — per-photo delete (memory stays as text), text export, confirm-guarded wipe-today, and one-tap
+cleanup enforcing the 500-photo cap plus 30-day pruning via new quota functions in
+memory-lens/src/services/photoFiles.ts and delete/detach helpers in memory-lens/src/services/memoryStore.ts.
+
+[Source lines 8455-8458]
+• No more invented sightings: the capture engine refuses to analyse "no frame" on real sources, and stops loudly —
+with the reason on screen — the first time a real photo can't be checked, instead of storing placeholder memories or
+photographing unscreened scenes. Simulation still demos, clearly labelled.
+• Wipe today now deletes voice-note audio files too, not just photos.
+
+Project guidance requirements
+-----------------------------
+
+[Source line 10711]
+when the qr code is scanned it should load the instrucgtions to walk you through.
+
+[Source lines 10717-10718]
+when you take a picutre of an insteuction page it should break it down for you do all the while durring both while
+watching the the camera to help guide you
+
+[Source line 11251]
+give live feedback if you see me folding wrong
+
+Project step previews
+---------------------
+
+[Source lines 1652-1655]
+• Model builder — new memory-lens/src/services/stepModel.ts, pure and dependency-free: parses part quantities ("Leg
+x4"), classifies parts into primitives (legs→cylinders, tops→flat boxes, screws→small cylinders, knobs→spheres,
+unknown→box), stages them deterministically (done steps back-center, current step in front highlighted, future steps
+behind ghosted), and computes a camera-framing radius.
+
+[Source lines 1660-1662]
+• Visual encoding, tested — the geometry-args and material mapping lives in partMeshProps() (single source of truth
+used by the view), covered by unit tests asserting radii, highlight color/emissive, and ghost transparency per
+state.
+
+Camera sources and Android wearable integration
+-----------------------------------------------
+
+[Source lines 1736-1739]
+Yes, conditionally — any glasses with a camera work if something can get their JPEG frames onto your network as either
+a snapshot URL or a WS binary stream. That "something" is the gap: you'd need a small bridge (a companion phone app, a
+script polling the glasses' media API, or a wearable relay). Glasses with an open API or accessible photo storage are
+bridgeable today with ~30 lines of glue; locked-down glasses with no media access are not.
+
+[Source lines 5888-5893]
+What changed: the Android module was stubs that threw "not wired". It now calls the actual DAT 1.0.1 SDK — I read the
+API straight from the shipped Maven artifacts rather than from docs or memory: session create/start/stop, permission
+status, device list + battery, camera streams at the configured fps/quality (frames converted to JPEG for the existing
+pipeline), photo capture, lens-display text, and registration-intent forwarding. Two real bugs found and fixed along
+the way: Wearables.initialize isn't idempotent (ALREADY_INITIALIZED on repeat calls), and the eyewear bridge never
+connected before streaming.
+
+[Source lines 8024-8026]
+6. In Memory Lens: Memory tab → Camera source → Meta → Register app → approve the link in the Meta AI app when it pops
+up → Check Meta (it should now list your glasses instead of "no devices") → press Start.
+
+Voice notes, recaps, and montage
+--------------------------------
+
+[Source lines 2893-2902]
+- **Mic only (no camera)** — voice notes (tap to record, transcribed,
+audio kept) and ambient sampling (short samples become text memories,
+audio deleted). Needs `POST /transcribe` on the backend; without it,
+voice notes save untranscribed.
+- **Recaps** — End-of-day and end-of-week summaries from your text
+memories: AI-narrated via `POST /recap` with a backend, counted
+locally without one.
+- **Cartoon montage** — saved event photos become a cartoon MP4
+(`POST /cartoon-montage`, server ffmpeg) with an in-app slideshow
+fallback.
+
+[Source lines 2906-2908]
+- **POV build recap** — record POV clips while building, then stitch
+clips + today’s photos into a sped-up timelapse MP4 (`POST /timelapse`,
+server ffmpeg) with an in-app slideshow fallback.
+
+Fast Capture
+------------
+
+[Source lines 1177-1181]
+Frames flow through a bounded ring buffer (90 frames / 4s) into the
+on-device change trigger; each event keeps its pre/post window, and with
+a backend configured the representative frames go to `POST /analyze-clip`
+for multi-frame analysis (“what happened”), otherwise the trigger frame
+is captioned alone.
+
+Layout and accessibility
+------------------------
+
+[Source lines 8200-8210]
+• One theme system (memory-lens/src/components/theme.tsx): every screen and shared component now reads design tokens —
+no hardcoded colors left in the four tabs. Light = soft paper with one solid Meta-blue accent; Dark = deep ink with
+a lighter blue that holds contrast. Settings → Look & feel → Match phone / Light / Dark, applied instantly
+everywhere, persisted on-device, and it follows the OS when set to Match phone.
+• Big, calm, one-job-per-card layout: 20pt-radius cards, 56pt-tall buttons (hard to miss, easy for small hands), 28pt
+headings, 15–17pt body text, soft shadows in light mode only, plainer dark surfaces. Tab bar and headers are themed
+too, with visible selected states.
+• Words a child gets: Memory now opens with "Memory Lens — I keep an eye on your things, so you don't have to."
+Sections renamed to plain jobs: "Where should I look?", "Find my things", "Teach me an object", "Just listen (no
+camera)", "Start watching" with the big button under it. Project opens with "Let's build it", Fast Capture explains
+itself in one line.
+
+[Source lines 11580-11582]
+It speaks instead of demanding reading. Step guidance and mistake warnings are spoken aloud, and the newest build
+talks you through folds and fixes while your hands are busy. Screens use large text, large touch targets, and plain,
+short sentences everywhere.
+
+Everyday use cases
+------------------
+
+[Source lines 11597-11609]
+You don't need a diagnosis to forget — you need a Tuesday. Normal life is full of small, expensive lapses:
+
+The wallet in yesterday's jacket, the passport before the airport run, the sunglasses on the café table.
+
+"Did I already add salt?" mid-recipe, with the glasses watching the counter.
+
+Assembling furniture at midnight: the app holds the instructions, reads the step, and checks your shelf bracket before
+the wall does.
+
+Travel and gig checklists ("gig kit: guitar, cable, picks") verified against what was actually seen packed.
+
+A searchable trail for the little mysteries: where the remote went, which box the cables are in, when the package was
+left at the door.
