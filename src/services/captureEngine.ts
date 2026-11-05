@@ -7,7 +7,7 @@ import { decideTriage } from './triage';
 import type { MemoryEvent, Scenario, ScenarioAlert } from './types';
 import type { VisionProvider } from './vision/provider';
 
-export type StopReason = 'user' | 'privacy' | 'error';
+export type StopReason = 'user' | 'privacy' | 'error' | 'unanalyzed';
 
 export interface CaptureCallbacks {
   onEvent?: (event: MemoryEvent) => void;
@@ -16,11 +16,19 @@ export interface CaptureCallbacks {
   onError?: (message: string) => void;
   /** A frame was discarded for merely mentioning a private place. */
   onPrivacySkip?: (reason: string) => void;
+  /** A real (non-simulated) source produced no frame this tick. */
+  onNoFrame?: () => void;
 }
 
 export interface CaptureEngineOptions {
   vision: VisionProvider;
-  /** Returns a cache file URI, or null for a simulated frame (no file). */
+  /**
+   * True only for the simulated source. Simulated frames (null photo) run
+   * the scripted demo; a real source returning null means "no frame" and
+   * must never be analysed as if it were a scene.
+   */
+  simulated?: boolean;
+  /** Returns a cache file URI, or null when no frame was captured. */
   takePhoto: () => Promise<string | null>;
   getScenarios: () => Scenario[];
   callbacks?: CaptureCallbacks;
@@ -75,8 +83,25 @@ export class CaptureEngine {
     this.busy = true;
     try {
       const photoUri = await this.opts.takePhoto();
+      if (!photoUri && !this.opts.simulated) {
+        // Real source, no frame (camera busy/not ready, glasses quiet):
+        // never invent a scene from nothing.
+        this.opts.callbacks?.onNoFrame?.();
+        return;
+      }
       const result = await this.opts.vision.analyze(photoUri);
       const now = Date.now();
+
+      if (photoUri && result.tags.includes('unanalyzed')) {
+        // A real photo nobody could screen or describe. Do not store it,
+        // do not keep photographing scenes we cannot check: stop loudly.
+        deletePhoto(photoUri);
+        this.stop(
+          'unanalyzed',
+          'This photo could not be checked or understood (no AI provider or backend connected), so watching stopped instead of guessing. Add a free provider key in Settings, then Start watching.',
+        );
+        return;
+      }
 
       const privacy = evaluatePrivacy(result);
       if (privacy.blocked) {

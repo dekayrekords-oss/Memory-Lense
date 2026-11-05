@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenBoundary from '@/components/ScreenBoundary';
 import Section from '@/components/Section';
 import UIButton from '@/components/UIButton';
+import { useTheme, useThemedStyles, type ThemeTokens } from '@/components/theme';
 import {
   assembleClip,
   byteChangeScore,
@@ -40,7 +41,7 @@ import {
 } from '@/services/settings';
 import type { CaptureSource } from '@/services/types';
 import { createClipVision } from '@/services/vision/clipVision';
-import { createVisionProvider } from '@/services/vision/provider';
+import { visionProviderForSettings } from '@/services/vision/provider';
 
 // Fast Capture: watch frames for sudden change and keep only the seconds
 // around the event — not the whole stream.
@@ -91,6 +92,7 @@ async function saveClipFrame(
 // above updates several times a second, and must not drag this list
 // through reconciliation with it.
 const FastEventRow = memo(function FastEventRow({ event }: { event: FastEvent }) {
+  const rowStyles = useThemedStyles(createRowStyles);
   return (
     <View style={rowStyles.event}>
       {event.thumbUri ? (
@@ -111,23 +113,27 @@ const FastEventRow = memo(function FastEventRow({ event }: { event: FastEvent })
   );
 });
 
-const rowStyles = StyleSheet.create({
+const createRowStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
   event: {
     flexDirection: 'row',
     gap: 10,
-    backgroundColor: '#fff',
+    backgroundColor: t.card,
     borderWidth: 1,
-    borderColor: '#e3e3e3',
+    borderColor: t.border,
     borderRadius: 10,
     padding: 10,
   },
   flex: { flex: 1 },
   thumb: { width: 56, height: 56, borderRadius: 8 },
-  caption: { fontWeight: '600' },
-  meta: { color: '#5f6368', fontSize: 12, marginTop: 2 },
+  caption: { fontWeight: '700', color: t.text, fontSize: 15 },
+  meta: { color: t.textSub, fontSize: 12, marginTop: 2 },
 });
 
 export default function FastCaptureScreen() {
+  const theme = useTheme();
+  const styles = useThemedStyles(createStyles);
+
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [sourceKind, setSourceKind] = useState<CaptureSource>('simulation');
@@ -150,7 +156,9 @@ export default function FastCaptureScreen() {
   const triggerRef = useRef(new FrameTrigger(DEFAULT_TRIGGER_CONFIG));
   const pendingRef = useRef<{ ts: number; peak: number; thumbUri: string | null } | null>(null);
   const simTickRef = useRef(0);
-  const [vision, setVision] = useState(() => createVisionProvider());
+  const [vision, setVision] = useState(() =>
+    visionProviderForSettings(getSettings()),
+  );
   const [clipVision, setClipVision] = useState(() => createClipVision());
   const [appSettings, setAppSettings] = useState<AppSettings>(() =>
     getSettings(),
@@ -162,7 +170,7 @@ export default function FastCaptureScreen() {
     const apply = (loaded: AppSettings) => {
       if (!live) return;
       setAppSettings(loaded);
-      setVision(createVisionProvider(loaded.visionApiUrl));
+      setVision(visionProviderForSettings(loaded));
       setClipVision(createClipVision({ endpoint: loaded.visionApiUrl }));
     };
     void loadSettings().then(apply);
@@ -309,6 +317,9 @@ export default function FastCaptureScreen() {
       ringRef.current.push(now, { bytes, uri });
 
       if (triggerRef.current.observe(change, now)) {
+        // A new burst while one is still pending: save the earlier event
+        // first instead of silently overwriting it.
+        if (pendingRef.current) await finalizePending();
         let thumbUri: string | null = uri;
         if (!thumbUri && sourceKind !== 'simulation') {
           thumbUri = await saveClipFrame(bytes, `event-${now}.jpg`);
@@ -427,6 +438,7 @@ export default function FastCaptureScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.heading}>Fast Capture</Text>
+            <Text style={styles.sub}>I watch for sudden movement and save the moment it happens.</Text>
             <Text style={styles.status}>{status}</Text>
 
             <Section title="Frame source">
@@ -445,13 +457,21 @@ export default function FastCaptureScreen() {
                       styles.chip,
                       kind === sourceKind && styles.chipActive,
                     ]}
-                    onPress={() => setSourceKind(kind)}
+                    onPress={() => {
+                      if (armed && kind !== sourceKind) {
+                        setStatus(
+                          'Stop capture before changing the camera source.',
+                        );
+                        return;
+                      }
+                      setSourceKind(kind);
+                    }}
                     accessibilityRole="button"
                     accessibilityLabel={`${label} frame source`}
                     accessibilityState={{ selected: kind === sourceKind }}
                   >
                     <Text
-                      style={kind === sourceKind && styles.chipTextActive}
+                      style={[styles.chipText, kind === sourceKind && styles.chipTextActive]}
                     >
                       {label}
                     </Text>
@@ -523,8 +543,8 @@ export default function FastCaptureScreen() {
                       width: `${Math.min(100, Math.round(score * 100))}%`,
                       backgroundColor:
                         score >= DEFAULT_TRIGGER_CONFIG.threshold
-                          ? '#c62828'
-                          : '#0a6cff',
+                          ? theme.danger
+                          : theme.accent,
                     },
                   ]}
                 />
@@ -551,8 +571,9 @@ export default function FastCaptureScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
+const createStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.bg },
   keyboard: { flex: 1 },
   container: {
     padding: 16,
@@ -561,44 +582,47 @@ const styles = StyleSheet.create({
     maxWidth: 720,
     alignSelf: 'center',
   },
-  heading: { fontSize: 22, fontWeight: '700' },
-  status: { color: '#555' },
-  sub: { color: '#5f6368' },
-  label: { fontWeight: '700', marginTop: 6 },
+  heading: { fontSize: 28, fontWeight: '800', color: t.text, letterSpacing: 0.2 },
+  status: { color: t.textMuted },
+  sub: { color: t.textSub },
+  label: { fontWeight: '700', marginTop: 6, color: t.text, fontSize: 15 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
-    backgroundColor: '#eef3ff',
+    backgroundColor: t.accentSoft,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    minHeight: 40,
+    minHeight: 48,
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  chipActive: { backgroundColor: '#0a6cff' },
-  chipTextActive: { color: '#fff', fontWeight: '700' },
+  chipActive: { backgroundColor: t.accent },
+  chipText: { color: t.text, fontWeight: '600', fontSize: 15 },
+  chipTextActive: { color: t.onAccent, fontWeight: '800' },
   camera: { height: 200, borderRadius: 12, overflow: 'hidden' },
   cameraPlaceholder: {
     height: 140,
     borderRadius: 12,
-    backgroundColor: '#eef1f6',
+    backgroundColor: t.surfaceSoft,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     padding: 12,
   },
-  placeholderText: { color: '#445', textAlign: 'center' },
+  placeholderText: { color: t.textMuted, textAlign: 'center' },
   input: {
+    color: t.text,
+    fontSize: 16,
     borderWidth: 1,
-    borderColor: '#ccc',
+    borderColor: t.borderStrong,
     borderRadius: 8,
     padding: 10,
-    backgroundColor: '#fff',
+    backgroundColor: t.card,
   },
   meterTrack: {
     height: 12,
     borderRadius: 6,
-    backgroundColor: '#e6ebf2',
+    backgroundColor: t.surfaceSoft,
     overflow: 'hidden',
   },
   meterFill: { height: 12, borderRadius: 6 },

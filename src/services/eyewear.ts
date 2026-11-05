@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { PermissionsAndroid, Platform } from 'react-native';
 import {
   captureSourceLabel,
   type CaptureSourceAdapter,
@@ -111,15 +112,39 @@ export function createMetaFrameSource(
     label: captureSourceLabel('meta'),
     start: async () => {
       if (started) return;
-      started = true;
-      await meta.configure();
+      try {
+        await meta.configure();
       // The native stream needs a device session first: connect to the
       // first registered glasses (the DAT auto-selector picks the pair).
       const devices = await meta.listDevices();
       await meta.connect(devices[0]?.id ?? '');
-      await meta.startCameraStream({ fps: 7, resolution: 'medium' }, (bytes) => {
-        latest = { bytes, ts: Date.now() };
-      });
+        // Glasses-side camera access is a separate DAT grant made in
+        // the Meta AI app. Without it the stream starts then dies
+        // with PERMISSIONS_DENIED and no frames ever arrive.
+        let permission = await meta.checkPermission('camera');
+        if (permission !== 'granted') {
+          permission = await meta.requestPermission('camera');
+        }
+        if (permission !== 'granted') {
+          throw new Error(
+            'Meta glasses camera permission was not granted. In the ' +
+              'Meta AI prompt, allow camera access for Memory Lens, ' +
+              'then tap Meta again.',
+          );
+        }
+        await meta.startCameraStream(
+          { fps: 7, resolution: 'medium' },
+          (bytes) => {
+            latest = { bytes, ts: Date.now() };
+          },
+        );
+        started = true;
+      } catch (error) {
+        // A failed start must stay retryable: pairing/app-ID fixes take
+        // effect on the next tap, not after a force-close.
+        started = false;
+        throw error;
+      }
     },
     stop: async () => {
       started = false;
@@ -127,13 +152,90 @@ export function createMetaFrameSource(
     },
     takePhoto: async () => {
       if (!latest) return null;
+      // A frozen glasses feed must never pass an old frame off as "now".
+      if (Date.now() - latest.ts > META_FRAME_MAX_AGE_MS) return null;
       const frame = latest;
       return writeFrame(frame.bytes, frame.ts);
     },
   };
 }
 
+export type EyewearPreviewState = 'live' | 'waiting' | 'stale';
+
+/** A feed with no new frame for this long is shown as paused. */
+export const PREVIEW_STALE_MS = 10_000;
+
+/**
+ * What the live glasses preview should say: nothing has arrived yet
+ * (waiting), fresh frames are flowing (live), or the feed paused —
+ * glasses taken off, asleep, or disconnected (stale).
+ */
+export function eyewearPreviewState(
+  hasFrame: boolean,
+  ageMs: number | null,
+): EyewearPreviewState {
+  if (!hasFrame || ageMs === null) return 'waiting';
+  return ageMs > PREVIEW_STALE_MS ? 'stale' : 'live';
+}
+
+export const META_BLUETOOTH_PERMISSIONS = [
+  'android.permission.BLUETOOTH_CONNECT',
+  'android.permission.BLUETOOTH_SCAN',
+] as const;
+
+export type BluetoothPermissionRequester = (
+  permissions: string[],
+) => Promise<Record<string, boolean>>;
+
+/**
+ * Android 12+: the DAT SDK finds the glasses over BLE itself
+ * (BluetoothDeviceDetection), and that provider never starts unless
+ * these runtime permissions are granted to THIS app — createSession
+ * then fails NO_ELIGIBLE_DEVICE even with the glasses registered,
+ * connected in Meta AI, and Developer Mode on. Off-Android there is
+ * nothing to request and this resolves true. The requester is
+ * injectable so tests never touch the real permission dialog.
+ */
+export async function ensureMetaBluetoothPermissions(
+  requester?: BluetoothPermissionRequester,
+): Promise<boolean> {
+  if (!requester && Platform.OS !== 'android') return true;
+  const ask: BluetoothPermissionRequester =
+    requester ??
+    (async (permissions) => {
+      const results = await PermissionsAndroid.requestMultiple(
+        permissions as Parameters<
+          typeof PermissionsAndroid.requestMultiple
+        >[0],
+      );
+      return Object.fromEntries(
+        permissions.map((permission) => [
+          permission,
+          results[permission as keyof typeof results] ===
+            PermissionsAndroid.RESULTS.GRANTED,
+        ]),
+      );
+    });
+  const grants = await ask([...META_BLUETOOTH_PERMISSIONS]);
+  return META_BLUETOOTH_PERMISSIONS.every(
+    (permission) => grants[permission] === true,
+  );
+}
+
 /** App-facing singleton: real native bridge when present, else seam. */
+export const META_FRAME_MAX_AGE_MS = 15_000;
+
 export function createEyewearMeta(): MetaDatService {
-  return createMetaDat(resolveMetaBridge());
+  let appIdConfigured = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Constants = require('expo-constants').default as {
+      expoConfig?: { extra?: { metaDat?: { appId?: unknown } } } | null;
+    };
+    const appId = Constants.expoConfig?.extra?.metaDat?.appId;
+    appIdConfigured = typeof appId === 'string' && appId.trim().length > 0;
+  } catch {
+    appIdConfigured = true;
+  }
+  return createMetaDat(resolveMetaBridge(), { appIdConfigured });
 }

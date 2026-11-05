@@ -6,7 +6,7 @@ export const MAX_INTERVAL_SECONDS = 600;
 export const DEFAULT_INTERVAL_SECONDS = 1;
 
 /** Intervals offered in the UI. */
-export const INTERVAL_PRESETS_SECONDS = [1, 5, 15, 30, 60, 300, 600];
+export const INTERVAL_PRESETS_SECONDS = [1, 2, 3, 5, 15, 30, 60, 300, 600];
 
 export function clampIntervalSeconds(seconds: number): number {
   if (!Number.isFinite(seconds)) return DEFAULT_INTERVAL_SECONDS;
@@ -47,4 +47,14 @@ export function pickPictureSize(sizes: string[]): string | undefined {
       ? adequate.sort((a, b) => a.area - b.area)
       : parsed.sort((a, b) => b.area - a.area);
   return pool[0].raw;
+}
+
+/**
+ * Headers for the self-hosted vision backend. When the server is started
+ * with MEMORY_LENS_TOKEN, the app must send the matching token; set it
+ * via EXPO_PUBLIC_VISION_TOKEN at build time.
+ */
+export function backendAuthHeaders(): Record<string, string> {
+  const token = process.env.EXPO_PUBLIC_VISION_TOKEN ?? '';
+  return token ? { 'x-memory-lens-token': token } : {};
 }

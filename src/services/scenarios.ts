@@ -28,9 +28,31 @@ function isCheckoutEvent(event: MemoryEvent): boolean {
   return event.tags.some((t) => CHECKOUT_TAGS.has(t.toLowerCase()));
 }
 
+function wordsOf(name: string): string[] {
+  return normalizeName(name)
+    .split(' ')
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Forgiving name match for "where is my screw?" style questions: exact
+ * normalized match, or every word of the shorter name appears in the
+ * longer ("screw" matches "Screw A"; "blue mug" matches "mug, blue").
+ */
+export function nameMatches(query: string, candidate: string): boolean {
+  const q = wordsOf(query);
+  const c = wordsOf(candidate);
+  if (q.length === 0 || c.length === 0) return false;
+  if (q.join(' ') === c.join(' ')) return true;
+  const [shorter, longer] = q.length <= c.length ? [q, c] : [c, q];
+  if (shorter.join(' ').length < 3) return false;
+  const longerSet = new Set(longer);
+  return shorter.every((w) => longerSet.has(w));
+}
+
 function seesObject(event: MemoryEvent, objectName: string): boolean {
-  const needle = normalizeName(objectName);
-  return event.objects.some((o) => normalizeName(o.name) === needle);
+  return event.objects.some((o) => nameMatches(objectName, o.name));
 }
 
 /** "brushed teeth" -> "brushed-teeth", for matching vision tags. */
@@ -96,14 +118,19 @@ export function scenarioDisplayName(scenario: Scenario): string {
 }
 
 /** Per-item checklist progress: seen anywhere, and seen in hand/cart. */
+export const CHECKLIST_WINDOW_MS = 12 * 60 * 60 * 1000;
+
 export function checklistProgress(
   events: MemoryEvent[],
   scenario: Extract<Scenario, { kind: 'checklist' }>,
+  windowStartTs: number = Number.NEGATIVE_INFINITY,
+  windowEndTs: number = Number.POSITIVE_INFINITY,
 ): ChecklistItemProgress[] {
   return scenario.items.map((item) => {
     let lastSeenTs: number | null = null;
     let held = false;
     for (const e of events) {
+      if (e.ts < windowStartTs || e.ts > windowEndTs) continue;
       if (!seesObject(e, item)) continue;
       if (lastSeenTs === null || e.ts > lastSeenTs) lastSeenTs = e.ts;
       if (isHeldSighting(e, item)) held = true;
@@ -125,19 +152,38 @@ export function findLastSeen(
 }
 
 /** Natural-language answer for "where are my keys?" style questions. */
+function smartWhen(ts: number, now: number): string {
+  const time = new Date(ts).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const startOfDay = (d: Date) => {
+    const copy = new Date(d);
+    copy.setHours(0, 0, 0, 0);
+    return copy.getTime();
+  };
+  const dayDiff = Math.round(
+    (startOfDay(new Date(now)) - startOfDay(new Date(ts))) / 86_400_000,
+  );
+  if (dayDiff <= 0) return `today at ${time}`;
+  if (dayDiff === 1) return `yesterday at ${time}`;
+  return `on ${new Date(ts).toLocaleDateString()} at ${time}`;
+}
+
 export function answerWhere(
   events: MemoryEvent[],
   objectName: string,
-  formatTime: (ts: number) => string = (ts) =>
-    new Date(ts).toLocaleTimeString(),
+  formatTime?: (ts: number) => string,
+  now: number = Date.now(),
 ): string {
   const seen = findLastSeen(events, objectName);
   if (!seen) return `I haven't seen your ${objectName} yet.`;
-  const place = seen.objects.find(
-    (o) => normalizeName(o.name) === normalizeName(objectName),
-  )?.place;
+  const place = seen.objects.find((o) => nameMatches(objectName, o.name))?.place;
   const where = place ? ` on the ${place}` : '';
-  return `I saw your ${objectName}${where} at ${formatTime(seen.ts)}.`;
+  const when = formatTime
+    ? `at ${formatTime(seen.ts)}`
+    : smartWhen(seen.ts, now);
+  return `I saw your ${objectName}${where} ${when}.`;
 }
 
 function exitAlertsFor(
@@ -205,9 +251,16 @@ export function evaluateScenarios(
         ),
       );
     } else if (scenario.kind === 'checklist') {
-      const progress = checklistProgress(events, scenario);
       for (const exitEvent of events) {
         if (!isExitEvent(exitEvent)) continue;
+        // Only sightings shortly BEFORE leaving count as packed — an item
+        // seen last week (or only after leaving) must still alert.
+        const progress = checklistProgress(
+          events,
+          scenario,
+          exitEvent.ts - CHECKLIST_WINDOW_MS,
+          exitEvent.ts,
+        );
         for (const p of progress) {
           if (p.seen) continue;
           alerts.push({
@@ -221,6 +274,12 @@ export function evaluateScenarios(
       }
       for (const checkout of events) {
         if (!isCheckoutEvent(checkout)) continue;
+        const progress = checklistProgress(
+          events,
+          scenario,
+          checkout.ts - CHECKLIST_WINDOW_MS,
+          checkout.ts,
+        );
         for (const p of progress) {
           if (p.seen) continue;
           alerts.push({

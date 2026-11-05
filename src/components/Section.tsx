@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useThemedStyles, type ThemeTokens } from './theme';
 
-// Card section for the long settings-style screens: one title, one
-// optional hint line, then the controls. Keeps the Memory/Project/Fast
-// screens visually consistent without restyling every row.
+// One friendly card per job: a clear title in plain words, one short
+// hint, then big controls. Same card on every tab, light and dark.
 
 interface SectionProps {
   title: string;
@@ -12,6 +12,7 @@ interface SectionProps {
 }
 
 export default function Section({ title, hint, children }: SectionProps) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.card} accessibilityRole="none">
       <Text style={styles.title}>{title}</Text>
@@ -21,15 +22,21 @@ export default function Section({ title, hint, children }: SectionProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#e3e3e3',
-  },
-  title: { fontSize: 15, fontWeight: '700' },
-  hint: { color: '#5f6368', fontSize: 13 },
-});
+const createStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    card: {
+      backgroundColor: t.card,
+      borderRadius: 20,
+      padding: 18,
+      gap: 12,
+      borderWidth: 1,
+      borderColor: t.border,
+      shadowColor: '#0B1B33',
+      shadowOpacity: t.scheme === 'dark' ? 0 : 0.06,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: t.scheme === 'dark' ? 0 : 2,
+    },
+    title: { fontSize: 18, fontWeight: '800', color: t.text, letterSpacing: 0.2 },
+    hint: { color: t.textSub, fontSize: 14, lineHeight: 20 },
+  });

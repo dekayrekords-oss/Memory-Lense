@@ -1,3 +1,4 @@
+import { backendAuthHeaders } from './config';
 import { File } from 'expo-file-system';
 
 // Audio transcription client: POST {base}/transcribe { audioBase64,
@@ -28,7 +29,7 @@ export class HttpTranscriber implements Transcriber {
     const audioBase64 = await this.readBase64(uri);
     const response = await fetch(`${this.base}/transcribe`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify({ audioBase64, mimeType: 'audio/m4a' }),
     });
     if (!response.ok) {

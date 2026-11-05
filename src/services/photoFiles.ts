@@ -84,3 +84,21 @@ export async function pruneExpiredPhotos(
   await removeKeptPhotos(expired);
   return expired;
 }
+
+/** Persists a training photo into its own directory. Returns its URI. */
+export async function persistTrainingPhoto(
+  cacheFileUri: string,
+  ts: number,
+): Promise<string> {
+  const dir = new Directory(Paths.document, 'trained-photos');
+  if (!dir.exists) {
+    try {
+      dir.create();
+    } catch {
+      // Created concurrently or already present.
+    }
+  }
+  const dest = new File(dir, `trained-${ts}.jpg`);
+  await new File(cacheFileUri).copy(dest);
+  return dest.uri;
+}

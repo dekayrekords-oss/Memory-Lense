@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Canvas, useFrame, type ThreeEvent } from '@react-three/fiber/native';
+import { Canvas, type ThreeEvent } from '@react-three/fiber/native';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
@@ -73,11 +73,17 @@ function GltfPart({ part, selected, onSelect }: PartViewProps) {
     failed: boolean;
   }>({ uri: '', scene: null, failed: false });
   const uri = part.modelUri;
-  const onClick = useTapSelect(onSelect, part.id);
+  // Untrusted step text can name any URL: nothing is fetched until the
+  // user taps this part (first tap selects and approves the download).
+  const [approvedUri, setApprovedUri] = useState<string | null>(null);
+  const onClick = useTapSelect((id) => {
+    if (uri) setApprovedUri(uri);
+    onSelect(id);
+  }, part.id);
 
   useEffect(() => {
     let live = true;
-    if (!uri) return;
+    if (!uri || approvedUri !== uri) return;
     new GLTFLoader()
       .loadAsync(uri)
       .then((gltf) => {
@@ -115,7 +121,7 @@ function GltfPart({ part, selected, onSelect }: PartViewProps) {
     return () => {
       live = false;
     };
-  }, [uri, part]);
+  }, [uri, part, approvedUri]);
 
   const scene = loaded.uri === uri ? loaded.scene : null;
   const failed = loaded.uri === uri && loaded.failed;
@@ -163,13 +169,6 @@ function Rig({
   const group = useRef<THREE.Group>(null);
   const dragging = useRef(false);
   const lastX = useRef(0);
-
-  useFrame((_, delta) => {
-    // Gentle auto-rotate when idle so the model reads as 3D at a glance.
-    if (group.current && !dragging.current) {
-      group.current.rotation.y += delta * 0.25;
-    }
-  });
 
   const onPointerDown = (event: ThreeEvent<PointerEvent>) => {
     dragging.current = true;

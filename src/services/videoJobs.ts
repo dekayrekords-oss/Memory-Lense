@@ -8,6 +8,8 @@
 // fall back to an in-app slideshow. Never throws "unavailable" —
 // createVideoJobs returns null instead.
 
+import { backendAuthHeaders } from './config';
+
 export interface TimelapseItem {
   kind: 'image' | 'video';
   base64: string;
@@ -40,7 +42,7 @@ export class HttpVideoJobs implements VideoJobs {
   private async post(path: string, body: unknown): Promise<string> {
     const response = await fetch(`${this.base}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify(body),
     });
     if (!response.ok) {

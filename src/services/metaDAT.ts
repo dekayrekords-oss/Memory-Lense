@@ -64,6 +64,8 @@ export interface MetaNativeBridge {
   configure(): Promise<void>;
   startRegistration(): Promise<void>;
   checkPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
+  /** Opens the Meta AI consent screen; resolves with the new status. */
+  requestPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
   listDevices(): Promise<MetaDevice[]>;
   startSession(deviceId: string): Promise<{ deviceId: string }>;
   startCameraStream(
@@ -97,6 +99,7 @@ export interface MetaDatService {
   configure(): Promise<boolean>;
   register(): Promise<void>;
   checkPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
+  requestPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
   listDevices(): Promise<MetaDevice[]>;
   connect(deviceId: string): Promise<void>;
   startCameraStream(
@@ -125,6 +128,7 @@ function unavailableService(): MetaDatService {
     configure: async () => false,
     register: fail,
     checkPermission: fail,
+    requestPermission: fail,
     listDevices: async () => [],
     connect: fail,
     startCameraStream: fail,
@@ -142,17 +146,24 @@ function unavailableService(): MetaDatService {
  */
 export function createMetaDat(
   bridge: MetaNativeBridge | null,
+  options?: { appIdConfigured?: boolean },
 ): MetaDatService {
   if (!bridge) return unavailableService();
   let configured = false;
   return {
     status: async () => ({
       available: true,
-      reason: null,
+      reason:
+        options?.appIdConfigured === false
+          ? 'No Meta App ID set: running in Developer Mode. In the Meta AI app (v290+) go to Settings > App Info, tap the app version 5 times, turn Developer Mode ON, then reopen this app and tap Register app, then Check Meta. Glasses firmware must be V128+. For a production build, add a Wearables Developer Center App ID in app.json (extra.metaDat.appId).'
+          : null,
       modules: [...DAT_MODULES],
       experimental: DAT_EXPERIMENTAL,
     }),
     configure: async () => {
+      // No App ID is NOT a blocker: the SDK treats an empty App ID as
+      // Developer Mode. Registration then runs against glasses that
+      // have Developer Mode switched on in the Meta AI app.
       if (!configured) {
         await bridge.configure();
         configured = true;
@@ -161,18 +172,91 @@ export function createMetaDat(
     },
     register: () => bridge.startRegistration(),
     checkPermission: (kind) => bridge.checkPermission(kind),
+    requestPermission: async (kind) => {
+      try {
+        return await bridge.requestPermission(kind);
+      } catch (error) {
+        throw new Error(friendlyDatError(error));
+      }
+    },
     listDevices: () => bridge.listDevices(),
     connect: async (deviceId) => {
-      await bridge.startSession(deviceId);
+      try {
+        await bridge.startSession(deviceId);
+      } catch (error) {
+        throw new Error(friendlyDatError(error));
+      }
     },
-    startCameraStream: (config, onFrame) =>
-      bridge.startCameraStream(config, onFrame),
+    startCameraStream: async (config, onFrame) => {
+      try {
+        return await bridge.startCameraStream(config, onFrame);
+      } catch (error) {
+        throw new Error(friendlyDatError(error));
+      }
+    },
     stopCameraStream: () => bridge.stopCameraStream(),
     capturePhoto: () => bridge.capturePhoto(),
     showText: (lines) => bridge.showText(lines),
     startSpeech: () => bridge.startSpeech(),
     getDeviceState: () => bridge.getDeviceState(),
   };
+}
+
+/**
+ * DAT failures arrive as raw native strings (e.g. a Kotlin error naming
+ * NO_ELIGIBLE_DEVICE). Translate the ones a user can act on.
+ */
+export function friendlyDatError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const upper = raw.toUpperCase();
+  if (
+    upper.includes('NO_ELIGIBLE_DEVICE') ||
+    upper.includes('NO ELIGIBLE DEVICE') ||
+    upper.includes('DEVICE_NOT_FOUND')
+  ) {
+    return (
+      'No Meta glasses are available for a session yet. Wear the glasses ' +
+      'so they are on and connected. In the Meta AI app (v290+), go to ' +
+      'Settings > App Info, tap the app version 5 times, and turn ' +
+      'Developer Mode ON. Then reopen Memory Lens, tap Register app, ' +
+      'then Check Meta. (A Meta Wearables Developer Center App ID is ' +
+      'only needed for production builds.) DAT does not support ' +
+      'non-Meta glasses.'
+    );
+  }
+  if (
+    upper.includes('UPDATE_REQUIRED') ||
+    upper.includes('UPDATE REQUIRED')
+  ) {
+    return (
+      'Your glasses need a software update before they can stream to ' +
+      'apps. Open the Meta AI app, open your glasses settings, and ' +
+      'install the firmware update (glasses in their case, charging, ' +
+      'near the phone). Then come back and tap Meta again.'
+    );
+  }
+  if (
+    upper.includes('SESSION_ENDED_BY_DEVICE') ||
+    upper.includes('DID NOT FINISH STARTING')
+  ) {
+    return (
+      'The glasses ended the session. Keep them on, make sure the ' +
+      'Meta AI app shows them connected, then tap Meta again.'
+    );
+  }
+  if (upper.includes('ALREADY_INITIALIZED')) {
+    return 'The Meta SDK was already initialized in this app process — try Check Meta again.';
+  }
+  if (
+    upper.includes('PERMISSION') &&
+    (upper.includes('DENIED') || upper.includes('NOT_GRANTED'))
+  ) {
+    return 'Camera permission for the Meta device was denied. Allow Memory Lens camera access in the Meta AI prompt (or Meta AI app permissions), then try again.';
+  }
+  if (upper.includes('NOT_CONFIGURED') || upper.includes('MISSING_APP_ID')) {
+    return 'Meta app ID not configured. Create an app at the Meta Wearables Developer Center and set its ID in the app config (extra.metaDat.appId).';
+  }
+  return raw;
 }
 
 /** Lazy native resolution — the local module throws when absent. */

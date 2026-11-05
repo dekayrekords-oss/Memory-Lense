@@ -26,6 +26,7 @@ export function eventsOnDay(events: MemoryEvent[], dayTs: number): MemoryEvent[]
 export interface WipeSelection {
   ids: number[];
   photoUris: string[];
+  audioUris: string[];
 }
 
 /** Rows + photos to remove when wiping the day containing `dayTs`. */
@@ -39,6 +40,9 @@ export function wipeDaySelection(
     photoUris: day
       .map((e) => e.photoUri)
       .filter((u): u is string => u !== null),
+    audioUris: day
+      .map((e) => e.audioUri)
+      .filter((u): u is string => u !== null && u !== undefined),
   };
 }
 

@@ -23,6 +23,7 @@ interface NativeMetaDat {
   configure(): Promise<void>;
   startRegistration(): Promise<void>;
   checkPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
+  requestPermission(kind: MetaPermission): Promise<MetaPermissionStatus>;
   listDevices(): Promise<MetaDevice[]>;
   startSession(deviceId: string): Promise<{ deviceId: string }>;
   startCameraStream(config: MetaStreamConfig): Promise<void>;
@@ -57,6 +58,7 @@ export const metaBridge: MetaNativeBridge = {
   configure: () => native.configure(),
   startRegistration: () => native.startRegistration(),
   checkPermission: (kind) => native.checkPermission(kind),
+  requestPermission: (kind) => native.requestPermission(kind),
   listDevices: () => native.listDevices(),
   startSession: (deviceId) => native.startSession(deviceId),
   startCameraStream: async (config, onFrame) => {

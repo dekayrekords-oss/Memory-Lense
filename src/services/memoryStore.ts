@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { nameMatches } from './scenarios';
 import type { MemoryEvent, SeenObject } from './types';
 
 // Text-first memory store. Rows hold the AI interpretation; photo_uri is set
@@ -130,8 +131,7 @@ export async function eventsSeeing(
   limit = 200,
 ): Promise<MemoryEvent[]> {
   const events = await listEvents(limit);
-  const needle = objectName.trim().toLowerCase();
   return events.filter((e) =>
-    e.objects.some((o) => o.name.trim().toLowerCase() === needle),
+    e.objects.some((o) => nameMatches(objectName, o.name)),
   );
 }

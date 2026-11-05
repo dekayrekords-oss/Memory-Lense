@@ -1,3 +1,4 @@
+import { backendAuthHeaders } from './config';
 import type { MemoryEvent } from './types';
 
 // End-of-day / end-of-week recaps. The backend narrates from the text
@@ -106,7 +107,7 @@ export class HttpRecap implements RecapService {
     const window = recapWindow(events, period, Date.now());
     const response = await fetch(`${this.base}/recap`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify({
         period,
         events: window.slice(-120).map((e) => ({

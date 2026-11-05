@@ -3,6 +3,8 @@ import {
   applyCheck,
   createSession,
   currentStepOf,
+  MANUAL_STEP_CHECK,
+  spokenFeedback,
   stepProgress,
 } from '../projectSession';
 import type { ProjectPlan, StepCheck } from '../types';
@@ -112,5 +114,67 @@ describe('applyCheck', () => {
     expect(next).not.toBe(state);
     expect(state.lastCheck).toBeNull();
     expect(state.currentStep).toBe(0);
+  });
+});
+
+describe('confidence gate (regression: zero-confidence pass)', () => {
+  const plan = {
+    title: 'Kit',
+    steps: [
+      { title: 'One', parts: [], instruction: 'Do one.' },
+      { title: 'Two', parts: [], instruction: 'Do two.' },
+    ],
+  };
+
+  it('downgrades a low-confidence complete to unclear and stays put', () => {
+    const state = createSession(plan);
+    const next = applyCheck(state, {
+      verdict: 'complete',
+      detail: 'looks done',
+      confidence: 0.05,
+    });
+    expect(next.currentStep).toBe(0);
+    expect(next.completed[0]).toBe(false);
+    expect(next.lastCheck?.verdict).toBe('unclear');
+  });
+
+  it('still advances on a confident complete and on manual Next', () => {
+    const state = createSession(plan);
+    expect(
+      applyCheck(state, { verdict: 'complete', detail: '', confidence: 0.9 })
+        .currentStep,
+    ).toBe(1);
+    expect(applyCheck(state, MANUAL_STEP_CHECK).currentStep).toBe(1);
+    expect(MANUAL_STEP_CHECK.detail).toContain('no photo check');
+  });
+});
+
+describe('spokenFeedback', () => {
+  it('announces the next step after a completed one', () => {
+    expect(spokenFeedback(COMPLETE, 'Attach the legs')).toBe(
+      'Step done. Next: Attach the legs',
+    );
+  });
+
+  it('celebrates instead of naming a next step when the build is done', () => {
+    expect(spokenFeedback(COMPLETE, null)).toBe(
+      'All steps complete. Nice work!',
+    );
+  });
+
+  it('warns with the checker detail on a mistake', () => {
+    expect(spokenFeedback(MISTAKE, 'Attach the legs')).toBe(
+      'Careful. Leg is reversed',
+    );
+    expect(
+      spokenFeedback({ verdict: 'mistake', detail: '  ', confidence: 0.7 }, null),
+    ).toBe('Careful. Something looks wrong on this step.');
+  });
+
+  it('coaches for a clearer view when the checker cannot tell', () => {
+    expect(spokenFeedback(UNCLEAR, 'Attach the legs')).toBe('Photo is blurry');
+    expect(
+      spokenFeedback({ verdict: 'unclear', detail: '', confidence: 0.2 }, null),
+    ).toBe('I cannot see this step clearly. Hold it up closer.');
   });
 });

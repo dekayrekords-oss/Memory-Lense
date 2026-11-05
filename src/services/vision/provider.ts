@@ -1,7 +1,11 @@
 import { File } from 'expo-file-system';
 import type { VisionResult } from '../types';
 import { MockVisionProvider } from './mockProvider';
+import { cloudConfigFromSettings } from '../aiProviders';
+import type { AppSettings } from '../settings';
+import { CloudVisionProvider } from './cloudVision';
 import { parseVisionResult } from './visionParse';
+import { backendAuthHeaders } from '../config';
 
 /**
  * Vision backend contract. Without configuration the app uses a
@@ -43,7 +47,7 @@ export class HttpVisionProvider implements VisionProvider {
     const imageBase64 = await this.readBase64(photoUri);
     const response = await fetch(this.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify({ imageBase64, mimeType: 'image/jpeg' }),
     });
     if (!response.ok) {
@@ -58,5 +62,21 @@ export function createVisionProvider(
 ): VisionProvider {
   const url = endpoint.trim();
   if (url) return new HttpVisionProvider(url);
+  return new MockVisionProvider();
+}
+
+/**
+ * The one place that turns Settings into a vision provider: cloud key
+ * first, then the self-hosted backend, then the honest offline demo.
+ * Every tab resolves vision through here so they can never disagree.
+ */
+export function visionProviderForSettings(
+  settings: AppSettings,
+): VisionProvider {
+  const cloud = cloudConfigFromSettings(settings);
+  if (cloud) return new CloudVisionProvider(cloud);
+  if (settings.visionSource === 'backend') {
+    return createVisionProvider(settings.visionApiUrl);
+  }
   return new MockVisionProvider();
 }

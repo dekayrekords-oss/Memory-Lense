@@ -1,5 +1,6 @@
 import { File } from 'expo-file-system';
 import type { ProjectPlan, ProjectStep, StepCheck, StepVerdict } from '../types';
+import { backendAuthHeaders } from '../config';
 
 // Project-mode vision client: parses an instruction sheet into steps,
 // checks a photographed step, and answers questions about a step.
@@ -84,9 +85,17 @@ export function parseProjectPlan(raw: unknown): ProjectPlan {
   if (!Array.isArray(record.steps) || record.steps.length === 0) {
     throw new Error('project plan has no steps');
   }
+  const steps = record.steps
+    .map(parseStep)
+    .filter((step) => step.title !== '' || step.instruction !== '');
+  if (steps.length === 0) {
+    throw new Error(
+      'project plan has no readable steps — the photo may be blurry; retake it closer, in good light',
+    );
+  }
   return {
-    title: asString(record.title).trim(),
-    steps: record.steps.map(parseStep),
+    title: asString(record.title).trim() || 'Instruction sheet',
+    steps,
   };
 }
 
@@ -137,7 +146,7 @@ export class HttpProjectVision implements ProjectVision {
   private async post(path: string, body: unknown): Promise<unknown> {
     const response = await fetch(`${this.base}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -233,12 +242,20 @@ const MOCK_COMPLETE: StepCheck = {
   confidence: 0.95,
 };
 
+export const REAL_PHOTO_NEEDS_PROVIDER =
+  'That was a real photo, and offline demo vision cannot read real photos. ' +
+  'Add a free AI provider key (or your vision backend) in the Settings tab, ' +
+  'then photograph the sheet again. In the Project tab you can also scan ' +
+  'the QR code printed on many instruction sheets to load the official ' +
+  'document. Demo mode only simulates a sheet when no photo is taken.';
+
 export class MockProjectVision implements ProjectVision {
   private index = 0;
 
   async parseInstructions(
-    _photoUri: string | null,
+    photoUri: string | null,
   ): Promise<ProjectPlan> {
+    if (photoUri) throw new Error(REAL_PHOTO_NEEDS_PROVIDER);
     return {
       title: MOCK_PLAN.title,
       steps: MOCK_PLAN.steps.map((step) => ({
@@ -249,9 +266,10 @@ export class MockProjectVision implements ProjectVision {
   }
 
   async checkStep(
-    _photoUri: string | null,
+    photoUri: string | null,
     _step: ProjectStep,
   ): Promise<StepCheck> {
+    if (photoUri) throw new Error(REAL_PHOTO_NEEDS_PROVIDER);
     const check = MOCK_CHECKS[this.index] ?? MOCK_COMPLETE;
     this.index += 1;
     return { ...check };

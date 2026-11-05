@@ -11,6 +11,7 @@ function mockBridge(overrides: Partial<MetaNativeBridge> = {}): MetaNativeBridge
     configure: jest.fn(async () => {}),
     startRegistration: jest.fn(async () => {}),
     checkPermission: jest.fn(async () => 'granted' as const),
+    requestPermission: jest.fn(async () => 'granted' as const),
     listDevices: jest.fn(async () => [
       { id: 'mock-1', name: 'Mock Ray-Ban Display', kind: 'glasses' as const },
     ]),
@@ -109,6 +110,66 @@ describe('createMetaDat with a native bridge', () => {
     const meta = createMetaDat(mockBridge());
     const state = await meta.getDeviceState();
     expect(state).toEqual({ batteryPercent: 82, connected: true });
+  });
+});
+
+describe('friendlyDatError + app id gate', () => {
+  it('translates NO_ELIGIBLE_DEVICE into pairing instructions', async () => {
+    const bridge = mockBridge({
+      startSession: jest.fn(async () => {
+        throw new Error('NO_ELIGIBLE_DEVICE: No eligible device found');
+      }),
+    });
+    const meta = createMetaDat(bridge);
+    await expect(meta.connect('mock-1')).rejects.toThrow(
+      /Developer Mode ON/,
+    );
+  });
+
+  it('translates glasses-update session failures into update steps', async () => {
+    const bridge = mockBridge({
+      startCameraStream: jest.fn(async () => {
+        throw new Error(
+          'Meta session did not finish starting (state=STOPPED, ' +
+            'last error: DAT_APP_ON_THE_GLASSES_UPDATE_REQUIRED).',
+        );
+      }),
+    });
+    const meta = createMetaDat(bridge);
+    await expect(
+      meta.startCameraStream({ fps: 7, resolution: 'medium' }, () => {}),
+    ).rejects.toThrow(/software update/i);
+  });
+
+  it('translates device-ended sessions into a retry message', async () => {
+    const bridge = mockBridge({
+      startSession: jest.fn(async () => {
+        throw new Error('session error SESSION_ENDED_BY_DEVICE');
+      }),
+    });
+    const meta = createMetaDat(bridge);
+    await expect(meta.connect('mock-1')).rejects.toThrow(/ended the session/);
+  });
+
+  it('runs in Developer Mode (no throw) when no Meta app id is set', async () => {
+    const bridge = mockBridge();
+    const meta = createMetaDat(bridge, { appIdConfigured: false });
+    const status = await meta.status();
+    expect(status.available).toBe(true);
+    expect(status.reason).toContain('Developer Mode');
+    await expect(meta.configure()).resolves.toBe(true);
+    expect(bridge.configure).toHaveBeenCalled();
+  });
+
+  it('keeps unknown errors verbatim', async () => {
+    const bridge = mockBridge({
+      startSession: jest.fn(async () => {
+        throw new Error('something odd');
+      }),
+    });
+    await expect(createMetaDat(bridge).connect('x')).rejects.toThrow(
+      'something odd',
+    );
   });
 });
 

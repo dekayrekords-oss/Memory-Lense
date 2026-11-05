@@ -3,7 +3,42 @@ import {
   createHttpFrameSource,
   createPhoneSource,
   createSimulationSource,
+  watchPreflightNote,
 } from '../captureSources';
+
+describe('watchPreflightNote', () => {
+  it('explains the block before Start for real cameras on demo vision', () => {
+    const note = watchPreflightNote({
+      sourceKind: 'meta',
+      demoVision: true,
+    });
+    expect(note).toMatch(/cannot understand/i);
+    expect(note).toMatch(/Settings/);
+  });
+
+  it('blocks every real source the same way', () => {
+    for (const sourceKind of ['phone', 'glasses', 'robot'] as const) {
+      expect(
+        watchPreflightNote({ sourceKind, demoVision: true }),
+      ).not.toBeNull();
+    }
+  });
+
+  it('lets the simulation demo run untouched', () => {
+    expect(
+      watchPreflightNote({ sourceKind: 'simulation', demoVision: true }),
+    ).toBeNull();
+  });
+
+  it('lets real cameras run once a real provider is connected', () => {
+    expect(
+      watchPreflightNote({ sourceKind: 'meta', demoVision: false }),
+    ).toBeNull();
+    expect(
+      watchPreflightNote({ sourceKind: 'phone', demoVision: false }),
+    ).toBeNull();
+  });
+});
 
 describe('createSimulationSource', () => {
   it('produces frameless ticks for the mock pipeline', async () => {

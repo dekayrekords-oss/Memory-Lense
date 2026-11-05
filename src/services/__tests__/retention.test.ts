@@ -55,7 +55,21 @@ describe('wipeDaySelection', () => {
     expect(wipeDaySelection(events, today)).toEqual({
       ids: [1, 2],
       photoUris: ['file:///a.jpg'],
+      audioUris: [],
     });
+  });
+});
+
+describe('wipeDaySelection audio (regression: wipe left voice files)', () => {
+  it('selects audio files so wipe really deletes them', () => {
+    const today = noon(0);
+    const events = [
+      event({ id: 1, ts: today, audioUri: 'file:///note.m4a' }),
+      event({ id: 2, ts: noon(-1), audioUri: 'file:///old.m4a' }),
+    ];
+    const selection = wipeDaySelection(events, today);
+    expect(selection.audioUris).toEqual(['file:///note.m4a']);
+    expect(selection.ids).toEqual([1]);
   });
 });
 

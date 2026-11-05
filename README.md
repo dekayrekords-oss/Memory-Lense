@@ -1,8 +1,6 @@
 # Memory Lens
 
-A phone-first memory assistant. It watches through the camera on a scalable
-timer (1 second to 10 minutes), remembers where things are, and watches for
-scenarios you set — then keeps only what matters.
+Memory Lens is a visual memory assistant for everyday life. It uses your phone camera or a compatible camera feed to remember where you last saw things. Ask “Where did I leave my keys?” and it can tell you the last place and time it saw them. You can also set reminders for things you want to take with you, like your wallet or a tool bag.
 
 Built with Expo (React Native, SDK 58) for iOS and Android. **Memory mode**,
 **Project mode**, and **Fast Capture** are live.
@@ -13,7 +11,8 @@ This project uses Expo SDK 58, which currently needs a **development build**
 (Expo Go targets SDK 57 during the transition). Pick one:
 
 ```bash
-cd /Users/prog/memory-lens
+git clone https://github.com/dekayrekords-oss/Memory-Lense.git
+cd Memory-Lense
 npm install          # already done if node_modules exists
 
 # Cloud build (no local Xcode/Android Studio needed):
@@ -24,7 +23,7 @@ npx expo start       # then open the dev build and scan the QR code
 npx expo run:ios     # or: npx expo run:android
 ```
 
-Checks: `npm test` (180 tests, 21 suites) · `npx tsc --noEmit` · `npx eslint .` ·
+Checks: `npm test` (221+ tests, 27 suites — run it for the current count) · `npx tsc --noEmit` · `npx eslint .` ·
 `npx expo-doctor` · `npx expo export --platform android --platform ios` ·
 `node --check server/vision-server.mjs`.
 
@@ -93,9 +92,15 @@ npx expo start                         # restart so the URL is inlined
 The app uploads each photo as base64 (`POST { imageBase64, mimeType }`) to
 `EXPO_PUBLIC_VISION_API_URL`; `server/vision-server.mjs` sends it to any
 OpenAI-compatible vision model (`VISION_MODEL`, default `gpt-4o-mini`) and
-returns the `VisionResult` JSON the app expects. The model key lives only
-on your computer — never in the app. Model output is parsed strictly and
-fails closed (`src/services/vision/visionParse.ts`).
+returns the `VisionResult` JSON the app expects. With the self-hosted
+backend the model key lives only on your computer — never in the app.
+If you instead pick a cloud provider in Settings, your key is stored in
+the phone's keystore and photos are sent from the phone to that provider
+for analysis; that is a different privacy trade-off and the Settings
+screen says so where you choose it. Run the server with
+`MEMORY_LENS_TOKEN` set (and the matching `EXPO_PUBLIC_VISION_TOKEN` in
+the app build) before exposing it beyond localhost. Model output is
+parsed strictly and fails closed (`src/services/vision/visionParse.ts`).
 
 ## What Project mode does today
 
@@ -194,9 +199,9 @@ resolves.)
 
 Build profiles (`development`, `preview`, `production`), Meta console
 activation, background-capture limits, and a device test checklist live
-in [docs/release.md](/Users/prog/memory-lens/docs/release.md); store
+in [docs/release.md](docs/release.md); store
 listing copy, privacy policy, and data-safety answers are drafted in
-[docs/store.md](/Users/prog/memory-lens/docs/store.md).
+[docs/store.md](docs/store.md).
 
 ## Roadmap (from the full product brief)
 

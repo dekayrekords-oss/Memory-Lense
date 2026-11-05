@@ -1,15 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { Tabs } from 'expo-router';
+import { ThemeProvider, useTheme } from '@/components/theme';
 
-export default function RootLayout() {
+function ThemedTabs() {
+  const theme = useTheme();
   return (
     <>
-      <StatusBar style="dark" />
+      <StatusBar style={theme.scheme === 'dark' ? 'light' : 'dark'} />
       <Tabs
         screenOptions={{
-          tabBarActiveTintColor: '#0a6cff',
-          tabBarInactiveTintColor: '#5f6368',
+          headerStyle: { backgroundColor: theme.card },
+          headerTintColor: theme.text,
+          headerTitleStyle: { fontSize: 20, fontWeight: '800' },
+          headerShadowVisible: false,
+          tabBarActiveTintColor: theme.accent,
+          tabBarInactiveTintColor: theme.textMuted,
+          tabBarStyle: {
+            backgroundColor: theme.card,
+            borderTopColor: theme.border,
+            height: 68,
+            paddingBottom: 8,
+            paddingTop: 6,
+          },
+          tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
         }}
       >
         <Tabs.Screen
@@ -66,5 +80,13 @@ export default function RootLayout() {
         />
       </Tabs>
     </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <ThemeProvider>
+      <ThemedTabs />
+    </ThemeProvider>
   );
 }

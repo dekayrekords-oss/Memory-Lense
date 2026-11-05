@@ -123,6 +123,33 @@ describe('parseStepCheck', () => {
   });
 });
 
+describe('Mock project vision with a real photo (regression: silent no-op)', () => {
+  it('refuses to fake reading a photographed instruction sheet', async () => {
+    const saved = withoutHttpEnv();
+    try {
+      const vision = createProjectVision();
+      await expect(
+        vision.parseInstructions('file:///cache/real-sheet.jpg'),
+      ).rejects.toThrow(/Settings/);
+    } finally {
+      restoreEnv(saved);
+    }
+  });
+
+  it('refuses to fake checking a photographed build step', async () => {
+    const saved = withoutHttpEnv();
+    try {
+      const vision = createProjectVision();
+      const plan = await vision.parseInstructions(null);
+      await expect(
+        vision.checkStep('file:///cache/real-step.jpg', plan.steps[0]),
+      ).rejects.toThrow(/Settings/);
+    } finally {
+      restoreEnv(saved);
+    }
+  });
+});
+
 describe('Mock project vision (no env configured)', () => {
   it('returns the deterministic desk plan matching the stub steps', async () => {
     const saved = withoutHttpEnv();

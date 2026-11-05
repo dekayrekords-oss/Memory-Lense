@@ -1,8 +1,10 @@
 import {
+  createAudioPlayer,
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
+  type AudioPlayer,
 } from 'expo-audio';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -25,6 +27,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenBoundary from '@/components/ScreenBoundary';
 import Section from '@/components/Section';
 import UIButton from '@/components/UIButton';
+import { useThemedStyles, type ThemeTokens } from '@/components/theme';
 import {
   formatInterval,
   INTERVAL_PRESETS_SECONDS,
@@ -35,6 +38,8 @@ import { CaptureEngine } from '@/services/captureEngine';
 import {
   createEyewearMeta,
   createMetaFrameSource,
+  ensureMetaBluetoothPermissions,
+  eyewearPreviewState,
   profileForUrl,
 } from '@/services/eyewear';
 import { MicSession, type MicRecorderAdapter } from '@/services/micCapture';
@@ -49,10 +54,12 @@ import {
   deletePhoto,
   enforcePhotoQuota,
   pruneExpiredPhotos,
+  persistTrainingPhoto,
   removeKeptPhotos,
 } from '@/services/photoFiles';
 import {
   exportMemoriesAsText,
+  dayStartMs,
   keptPhotoRefs,
   wipeDaySelection,
 } from '@/services/retention';
@@ -75,6 +82,7 @@ import {
   createHttpFrameSource,
   createPhoneSource,
   createSimulationSource,
+  watchPreflightNote,
   type CaptureSourceAdapter,
 } from '@/services/captureSources';
 import type {
@@ -83,7 +91,19 @@ import type {
   Scenario,
   ScenarioAlert,
 } from '@/services/types';
-import { createVisionProvider } from '@/services/vision/provider';
+import { visionProviderForSettings } from '@/services/vision/provider';
+import { maybeCheckLocalModelUpdate } from '@/services/localModel';
+import { MockVisionProvider } from '@/services/vision/mockProvider';
+import {
+  addTrainedPhoto,
+  listTrainedObjects,
+  loadAlerts,
+  loadWatchItems,
+  removeTrainedObject,
+  saveAlerts,
+  saveWatchItems,
+  type TrainedObject,
+} from '@/services/listStore';
 
 async function saveVideoBytes(
   videoBase64: string,
@@ -106,7 +126,9 @@ async function saveVideoBytes(
 let scenarioSeq = 0;
 function nextId(prefix: string): string {
   scenarioSeq += 1;
-  return `${prefix}-${scenarioSeq}`;
+  // Timestamped so ids never collide with ones persisted before a restart
+  // (a reused id would delete two chips at once and mute a needed alert).
+  return `${prefix}-${Date.now().toString(36)}-${scenarioSeq}`;
 }
 
 const DEFAULT_SCENARIOS: Scenario[] = [
@@ -126,12 +148,23 @@ const DEFAULT_SCENARIOS: Scenario[] = [
 ];
 
 export default function MemoryScreen() {
+  const styles = useThemedStyles(createStyles);
+
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [pictureSize, setPictureSize] = useState<string | undefined>();
 
   const [running, setRunning] = useState(false);
-  const [status, setStatus] = useState('Ready. Simulation runs without a camera.');
+  const [status, setStatus] = useState('Ready.');
+  // Latest glasses/bridge frame shown as the live view, so the wearer
+  // can SEE the feed works instead of trusting a status line. Tagged
+  // with its source so switching cameras never flashes a stale frame.
+  const [glassesPreview, setGlassesPreview] = useState<{
+    source: CaptureSource;
+    uri: string;
+    at: number;
+  } | null>(null);
+  const [previewNow, setPreviewNow] = useState(() => Date.now());
   const [intervalSeconds, setIntervalSeconds] = useState(5);
   const [sourceKind, setSourceKind] = useState<CaptureSource>('phone');
   const [frameUrl, setFrameUrl] = useState('http://192.168.1.20:9000/frame.jpg');
@@ -153,7 +186,34 @@ export default function MemoryScreen() {
   const [exportText, setExportText] = useState<string | null>(null);
   const [retentionStatus, setRetentionStatus] = useState<string | null>(null);
   const [metaInfo, setMetaInfo] = useState<string | null>(null);
+  const [trained, setTrained] = useState<TrainedObject[]>([]);
+  const [trainName, setTrainName] = useState('');
+  const [trainDraft, setTrainDraft] = useState<string[]>([]);
+  const watchLoadedRef = useRef(false);
   const [micRecording, setMicRecording] = useState(false);
+  const voicePlayerRef = useRef<AudioPlayer | null>(null);
+  const [slideshow, setSlideshow] = useState<string[] | null>(null);
+  const [slideshowIndex, setSlideshowIndex] = useState(0);
+
+  const playVoiceNote = (uri: string) => {
+    try {
+      voicePlayerRef.current?.pause();
+      const player = createAudioPlayer(uri);
+      voicePlayerRef.current = player;
+      player.play();
+    } catch {
+      setMicStatus('That voice note could not be played.');
+    }
+  };
+
+  useEffect(() => {
+    if (!slideshow || slideshow.length === 0) return;
+    const timer = setInterval(
+      () => setSlideshowIndex((i) => (i + 1) % slideshow.length),
+      2500,
+    );
+    return () => clearInterval(timer);
+  }, [slideshow]);
   const [ambientOn, setAmbientOn] = useState(false);
   const [micStatus, setMicStatus] = useState<string | null>(null);
   const [recap, setRecap] = useState<Recap | null>(null);
@@ -167,12 +227,15 @@ export default function MemoryScreen() {
     scenariosRef.current = scenarios;
   }, [scenarios]);
   const engineRef = useRef<CaptureEngine | null>(null);
+  const adapterRef = useRef<CaptureSourceAdapter | null>(null);
 
   const [appSettings, setAppSettings] = useState<AppSettings>(() =>
     getSettings(),
   );
   useEffect(() => {
     let live = true;
+    // On-device model update check — at most once a day on app open.
+    void maybeCheckLocalModelUpdate();
     void loadSettings().then((loaded) => {
       if (!live) return;
       setAppSettings(loaded);
@@ -185,7 +248,18 @@ export default function MemoryScreen() {
     };
   }, []);
   const visionEndpoint = appSettings.visionApiUrl;
-  const demoVision = visionEndpoint.trim() === '';
+  const visionProvider = useMemo(
+    () => visionProviderForSettings(appSettings),
+    [appSettings],
+  );
+  const demoVision = visionProvider instanceof MockVisionProvider;
+  const watchNote = watchPreflightNote({ sourceKind, demoVision });
+  const activePreview =
+    glassesPreview?.source === sourceKind ? glassesPreview : null;
+  const previewState = eyewearPreviewState(
+    activePreview !== null,
+    activePreview ? previewNow - activePreview.at : null,
+  );
 
   const takePhoto = useCallback(async (): Promise<string | null> => {
     if (!permission?.granted || !cameraRef.current) return null;
@@ -231,15 +305,33 @@ export default function MemoryScreen() {
       default:
         adapter = createPhoneSource(takePhoto);
     }
+    adapterRef.current = adapter;
     if (adapter.start) {
-      void adapter.start().catch((error: unknown) => {
+      void (async () => {
+        if (sourceKind === 'meta') {
+          // DAT detects the glasses over BLE itself; without the
+          // Nearby devices permission its detection never starts and
+          // the session fails as "no glasses" even when they are on.
+          const granted = await ensureMetaBluetoothPermissions();
+          if (!granted) {
+            setStatus(
+              'Bluetooth permission needed: allow "Nearby devices" for ' +
+                'Memory Lens so it can reach your Meta glasses, then ' +
+                'tap Meta again.',
+            );
+            return;
+          }
+        }
+        await adapter.start?.();
+      })().catch((error: unknown) => {
         setStatus(
           `Eyewear error: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
     }
     const engine = new CaptureEngine({
-      vision: createVisionProvider(visionEndpoint),
+      simulated: sourceKind === 'simulation',
+      vision: visionProvider,
       takePhoto: adapter.takePhoto,
       getScenarios: () => scenariosRef.current,
       callbacks: {
@@ -263,6 +355,8 @@ export default function MemoryScreen() {
               `Stopped: private scene detected (${detail ?? 'privacy tag'}). ` +
                 'Point the camera elsewhere, then Start watching.',
             );
+          } else if (reason === 'unanalyzed') {
+            setStatus(detail ?? 'Stopped: photos could not be checked.');
           } else if (reason === 'error') {
             setStatus(`Stopped after an error: ${detail ?? 'unknown'}`);
           } else {
@@ -270,6 +364,10 @@ export default function MemoryScreen() {
           }
         },
         onError: (message) => setStatus(`Error: ${message}`),
+        onNoFrame: () =>
+          setStatus(
+            'Waiting for a photo from the camera… if this stays, check the camera is not covered and permission is on.',
+          ),
       },
     });
     engineRef.current = engine;
@@ -277,9 +375,40 @@ export default function MemoryScreen() {
     return () => {
       engine.stop();
       deactivateKeepAwake();
+      if (adapterRef.current === adapter) adapterRef.current = null;
       void adapter.stop?.().catch(() => {});
     };
-  }, [sourceKind, engineFrameUrl, takePhoto, metaService, visionEndpoint]);
+  }, [sourceKind, engineFrameUrl, takePhoto, metaService, visionProvider]);
+
+  // Live view for glasses/bridge feeds: poll the adapter for its
+  // freshest frame so the wearer can SEE the feed arriving. Without
+  // this the glasses "work" invisibly and look broken.
+  useEffect(() => {
+    if (sourceKind === 'phone' || sourceKind === 'simulation') return;
+    let cancelled = false;
+    let inFlight = false;
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const uri = await adapterRef.current?.takePhoto();
+        if (!cancelled && uri) {
+          setGlassesPreview({ source: sourceKind, uri, at: Date.now() });
+        }
+      } catch {
+        // Feed not ready; the waiting/stale caption covers it.
+      } finally {
+        inFlight = false;
+        if (!cancelled) setPreviewNow(Date.now());
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [sourceKind]);
 
   const toggleCapture = () => {
     const engine = engineRef.current;
@@ -288,6 +417,13 @@ export default function MemoryScreen() {
       engine.stop();
       deactivateKeepAwake();
     } else {
+      // Real camera + demo vision can only start and instantly stop
+      // (first photo unanalyzed). Say so here instead of flip-flopping
+      // the button and stranding the reason at the top of the page.
+      if (watchNote) {
+        setStatus(watchNote);
+        return;
+      }
       engine.start(intervalSeconds);
       setRunning(true);
       void activateKeepAwakeAsync().catch(() => {});
@@ -304,7 +440,10 @@ export default function MemoryScreen() {
 
   const addScenario = (kind: 'remember-object' | 'exit-check', raw: string) => {
     const object = raw.trim().toLowerCase();
-    if (!object) return;
+    if (!object) {
+      setStatus('Type what to watch for first, then tap Track or Watch.');
+      return;
+    }
     const scenario: Scenario =
       kind === 'remember-object'
         ? {
@@ -325,7 +464,10 @@ export default function MemoryScreen() {
 
   const addRequirement = (raw: string) => {
     const requirement = raw.trim().toLowerCase();
-    if (!requirement) return;
+    if (!requirement) {
+      setStatus('Type what must happen before leaving first.');
+      return;
+    }
     setScenarios((prev) => [
       ...prev,
       {
@@ -336,6 +478,7 @@ export default function MemoryScreen() {
         windowMinutes: 120,
       },
     ]);
+    setStatus(`Added to your watch list: Don't let me leave before ${requirement}.`);
   };
 
   const addChecklist = (title: string, rawItems: string) => {
@@ -344,11 +487,103 @@ export default function MemoryScreen() {
       .split(',')
       .map((i) => i.trim().toLowerCase())
       .filter((i) => i.length > 0);
-    if (!name || items.length === 0) return;
+    if (!name || items.length === 0) {
+      setStatus('Give the list a name AND comma-separated items — both are needed.');
+      return;
+    }
     setScenarios((prev) => [
       ...prev,
       { id: nextId('list'), kind: 'checklist', title: name, items, label: name },
     ]);
+    setStatus(`Added list "${name}" with ${items.length} item(s). Tap a chip below to remove.`);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await loadWatchItems();
+        if (!cancelled && stored) setScenarios(stored);
+        if (!cancelled) setAlerts(await loadAlerts());
+        if (!cancelled) setTrained(await listTrainedObjects());
+      } catch {
+        // First run or unavailable storage: keep the built-in defaults.
+      } finally {
+        watchLoadedRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!watchLoadedRef.current) return;
+    void saveWatchItems(scenarios).catch(() => {});
+  }, [scenarios]);
+
+  useEffect(() => {
+    if (!watchLoadedRef.current) return;
+    void saveAlerts(alerts.slice(0, 30)).catch(() => {});
+  }, [alerts]);
+
+  const takeTrainingPhoto = async () => {
+    if (sourceKind !== 'phone') {
+      setStatus('Training uses the phone camera - switch Camera source to Phone first.');
+      return;
+    }
+    if (!permission?.granted) {
+      setStatus('Camera permission needed for training photos.');
+      return;
+    }
+    if (busy) return;
+    setBusy('train');
+    try {
+      const photo = await cameraRef.current?.takePictureAsync({ quality: 0.6 });
+      if (photo?.uri) {
+        const uri = await persistTrainingPhoto(photo.uri, Date.now());
+        setTrainDraft((prev) => [...prev, uri]);
+        setStatus(`Training photo ${trainDraft.length + 1} saved. Take 2-3 from different angles.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Training photo failed: ${message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveTrainedObject = async () => {
+    if (busy) return;
+    const name = trainName.trim().toLowerCase();
+    if (!name || trainDraft.length === 0) {
+      setStatus('Name the object and take at least one training photo first.');
+      return;
+    }
+    const count = trainDraft.length;
+    const ts = Date.now();
+    for (let i = 0; i < trainDraft.length; i += 1) {
+      await addTrainedPhoto(name, trainDraft[i], ts + i);
+    }
+    setTrainName('');
+    setTrainDraft([]);
+    setTrained(await listTrainedObjects());
+    addScenario('remember-object', name);
+    setStatus(
+      'Visual memory saved for "' + name + '" (' + count + ' photo(s)). Tracking by name; reference photos stay on this phone.',
+    );
+  };
+
+  const deleteTrainedObject = async (name: string) => {
+    const uris = await removeTrainedObject(name);
+    for (const uri of uris) deletePhoto(uri);
+    setTrained(await listTrainedObjects());
+    setScenarios((prev) =>
+      prev.filter(
+        (sc) => !(sc.kind === 'remember-object' && sc.object === name),
+      ),
+    );
+    setStatus('Removed visual memory for "' + name + '".');
   };
 
   const refreshEvents = useCallback(async () => {
@@ -415,6 +650,7 @@ export default function MemoryScreen() {
       const all = await listEvents(5000);
       const selection = wipeDaySelection(all, Date.now());
       await removeKeptPhotos(selection.photoUris);
+      for (const uri of selection.audioUris) deletePhoto(uri);
       const deleted = await deleteEventsByIds(selection.ids);
       setRetentionStatus(
         deleted === 0
@@ -450,13 +686,17 @@ export default function MemoryScreen() {
         setMetaInfo(status.reason ?? 'Meta unavailable.');
         return;
       }
+      const modeNote = status.reason ? ` ${status.reason}` : '';
       await metaService.configure();
       const devices = await metaService.listDevices();
       const state = await metaService.getDeviceState();
       const names = devices.map((d) => d.name).join(', ') || 'no devices yet';
       setMetaInfo(
         `DAT ready — modules: ${status.modules.join(', ')} (experimental: ${status.experimental.join(', ')}). ` +
-          `Devices: ${names}. Battery: ${state.batteryPercent ?? '—'}%, connected: ${state.connected ? 'yes' : 'no'}.`,
+          `Devices: ${names}. Battery: ${state.batteryPercent ?? '—'}%, connected: ${state.connected ? 'yes' : 'no'}.` +
+          (devices.length > 0
+            ? ' Glasses found — press Start to stream.'
+            : ' No glasses registered yet: in the Meta AI app go to Settings > App Info, tap the app version 5 times, turn Developer Mode ON, then tap Register app below.' + modeNote),
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -539,8 +779,14 @@ export default function MemoryScreen() {
         try {
           const event = await getMicSession().sampleAmbientOnce(8000);
           if (event) setEvents((prev) => [event, ...prev]);
-        } catch {
-          // Sampling is best-effort; the next tick retries.
+        } catch (error) {
+          // Never claim to be listening when nothing is recording.
+          setAmbientOn(false);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          setMicStatus(
+            `Ambient listening stopped: ${message}. Check microphone permission, then turn it on again.`,
+          );
         }
       })();
     }, 14000);
@@ -571,8 +817,10 @@ export default function MemoryScreen() {
       return;
     }
     if (!videoJobs) {
+      setSlideshow(photos.map((e) => e.photoUri as string));
+      setSlideshowIndex(0);
       setMontageStatus(
-        'Slideshow only: no vision backend configured for cartoon rendering.',
+        'Showing your kept photos as a slideshow. (The cartoon video needs the vision backend.)',
       );
       return;
     }
@@ -619,7 +867,10 @@ export default function MemoryScreen() {
             contentContainerStyle={styles.container}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.heading}>Memory mode</Text>
+            <Text style={styles.heading}>Memory Lens</Text>
+            <Text style={styles.heroSub}>
+              I keep an eye on your things, so you don&apos;t have to.
+            </Text>
             <Text style={styles.status}>{status}</Text>
 
             {alerts.map((a) => (
@@ -628,7 +879,7 @@ export default function MemoryScreen() {
               </View>
             ))}
 
-            <Section title="Camera source">
+            <Section title="Where should I look?" hint="Pick a camera: this phone, your glasses, or a practice simulation.">
               <View style={styles.chips}>
                 {(
                   [
@@ -651,7 +902,7 @@ export default function MemoryScreen() {
                     accessibilityState={{ selected: kind === sourceKind }}
                   >
                     <Text
-                      style={kind === sourceKind && styles.chipTextActive}
+                      style={[styles.chipText, kind === sourceKind && styles.chipTextActive]}
                     >
                       {label}
                     </Text>
@@ -680,8 +931,14 @@ export default function MemoryScreen() {
               {sourceKind === 'meta' ? (
                 <>
                   <Text style={styles.sub}>
-                    Native Wearables DAT stream (dev build + Meta console
-                    app ID). Alerts mirror to the lens display.
+                    Meta Wearables DAT works only with Ray-Ban Meta glasses
+                    registered to this app. No app ID is needed while
+                    testing: in the Meta AI app go to Settings &gt; App
+                    Info, tap the app version 5 times, and turn Developer
+                    Mode ON, then reopen Memory Lens. (A Developer Center
+                    app ID is only needed for production builds.) For other
+                    smart glasses that can serve JPEG frames, use the
+                    Glasses camera source above with a frame URL.
                   </Text>
                   <View style={styles.row}>
                     <View style={styles.flex}>
@@ -713,9 +970,10 @@ export default function MemoryScreen() {
 
       {demoVision ? (
         <Text style={styles.sub}>
-          Offline demo vision — real photos are not analyzed. Connect a
-          backend in the Settings tab for find/watch, exit alerts, and
-          privacy screening. (Simulation always runs the demo.)
+          Offline demo vision — real photos are not analyzed. In the
+          Settings tab, add a cloud API key (free options are listed there)
+          or connect a backend for find/watch, exit alerts, and privacy
+          screening. (Simulation always runs the demo.)
         </Text>
       ) : null}
       {sourceKind === 'phone' && permission?.granted ? (
@@ -727,14 +985,38 @@ export default function MemoryScreen() {
           pictureSize={pictureSize}
           onCameraReady={onCameraReady}
         />
+      ) : sourceKind !== 'phone' && sourceKind !== 'simulation' ? (
+        <>
+          {activePreview ? (
+            <Image
+              source={{ uri: activePreview.uri }}
+              style={styles.camera}
+              resizeMode="cover"
+              accessibilityLabel={`Live view from ${captureSourceLabel(sourceKind)}`}
+            />
+          ) : (
+            <View style={styles.cameraPlaceholder}>
+              <Text style={styles.placeholderText}>
+                {sourceKind === 'robot'
+                  ? 'Waiting for a photo from the robot camera…'
+                  : 'Waiting for a photo from your glasses… they must be on, worn, and connected.'}
+              </Text>
+            </View>
+          )}
+          <Text style={styles.sub}>
+            {previewState === 'live'
+              ? `Live from your ${sourceKind === 'robot' ? 'robot camera' : 'glasses'} — this is what I can see right now.`
+              : previewState === 'stale'
+                ? 'That photo is getting old — the feed looks paused. Check the glasses are on and connected.'
+                : 'No photo yet from this camera.'}
+          </Text>
+        </>
       ) : (
         <View style={styles.cameraPlaceholder}>
           <Text style={styles.placeholderText}>
             {sourceKind === 'phone'
               ? 'No camera yet — Memory mode runs in simulation.'
-              : sourceKind === 'meta'
-                ? 'Meta glasses (DAT): frames stream natively in a dev build.'
-                : `${captureSourceLabel(sourceKind)}: frames come from the URL above.`}
+              : 'Simulation runs the practice demo — no camera needed.'}
           </Text>
           {sourceKind === 'phone' ? (
             <UIButton
@@ -747,8 +1029,8 @@ export default function MemoryScreen() {
       )}
 
       <Section
-        title="Watching"
-        hint="A photo on a timer. Raise the interval to save battery."
+        title="Start watching"
+        hint="Tap the big button and I will take a photo on a timer and remember what I see. Longer times between photos save battery."
       >
         <View style={styles.chips}>
           {INTERVAL_PRESETS_SECONDS.map((s) => (
@@ -760,12 +1042,13 @@ export default function MemoryScreen() {
               accessibilityLabel={`Photo every ${formatInterval(s)}`}
               accessibilityState={{ selected: s === intervalSeconds }}
             >
-              <Text style={s === intervalSeconds && styles.chipTextActive}>
+              <Text style={[styles.chipText, s === intervalSeconds && styles.chipTextActive]}>
                 {formatInterval(s)}
               </Text>
             </Pressable>
           ))}
         </View>
+        {watchNote ? <Text style={styles.sub}>{watchNote}</Text> : null}
         <UIButton
           title={running ? 'Stop watching' : 'Start watching'}
           variant={running ? 'danger' : 'primary'}
@@ -774,8 +1057,8 @@ export default function MemoryScreen() {
       </Section>
 
       <Section
-        title="Find & watch for"
-        hint="Ask where things are, or set alerts for leaving without them. Tap a watch below to remove it."
+        title="Find my things"
+        hint="Ask where something is — or tell me to watch for it and warn you before you leave without it. Tap a watch below to remove it."
       >
         <Text style={styles.fieldLabel}>Where is my…</Text>
         <View style={styles.row}>
@@ -887,12 +1170,30 @@ export default function MemoryScreen() {
               key={s.id}
               style={styles.chip}
               onPress={() =>
-                setScenarios((prev) => prev.filter((x) => x.id !== s.id))
+                Alert.alert(
+                  'Stop watching for this?',
+                  `"${scenarioDisplayName(s)}" will be removed. You can add it again any time.`,
+                  [
+                    { text: 'Keep it', style: 'cancel' },
+                    {
+                      text: 'Remove',
+                      style: 'destructive',
+                      onPress: () => {
+                        setScenarios((prev) =>
+                          prev.filter((x) => x.id !== s.id),
+                        );
+                        setStatus(
+                          `Removed: ${scenarioDisplayName(s)}. It is saved on this phone.`,
+                        );
+                      },
+                    },
+                  ],
+                )
               }
               accessibilityRole="button"
               accessibilityLabel={`Remove watch: ${scenarioDisplayName(s)}`}
             >
-              <Text>
+              <Text style={styles.chipText}>
                 {scenarioDisplayName(s)} ✕
               </Text>
             </Pressable>
@@ -907,7 +1208,7 @@ export default function MemoryScreen() {
           .map((s) => (
             <View key={s.id} style={styles.checklist}>
               <Text style={styles.checklistTitle}>{s.title}</Text>
-              {checklistProgress(events, s).map((p) => (
+              {checklistProgress(events, s, dayStartMs(events[0]?.ts ?? 0)).map((p) => (
                 <Text key={p.item} style={styles.sub}>
                   <Text style={styles.progressState}>
                     {p.held ? 'Packed' : p.seen ? 'Seen' : 'Todo'}
@@ -921,7 +1222,71 @@ export default function MemoryScreen() {
       </Section>
 
       <Section
-        title="Mic only (no camera)"
+        title="Teach me an object"
+        hint="Take a couple of photos of an object from different angles. The photos stay on this phone as your reference, and the app tracks the object by name whenever it is seen."
+      >
+        <TextInput
+          style={styles.input}
+          value={trainName}
+          onChangeText={setTrainName}
+          placeholder="Object name, e.g. blue mug"
+          returnKeyType="done"
+        />
+        {trainDraft.length > 0 ? (
+          <Text style={styles.sub}>
+            {trainDraft.length} training photo(s) ready. Take 2-3 total for a
+            good visual memory.
+          </Text>
+        ) : null}
+        <View style={styles.row}>
+          <View style={styles.flex}>
+            <UIButton
+              title={trainDraft.length > 0 ? 'Take another photo' : 'Take training photo'}
+              variant="secondary"
+              loading={busy === 'train'}
+              disabled={busy !== null}
+              onPress={() => void takeTrainingPhoto()}
+            />
+          </View>
+          <View style={styles.flex}>
+            <UIButton
+              title="Save visual memory"
+              variant="primary"
+              disabled={busy !== null || trainDraft.length === 0}
+              onPress={() => void saveTrainedObject()}
+            />
+          </View>
+        </View>
+        {trained.map((t) => (
+          <View key={t.name} style={styles.row}>
+            {t.photoUris.slice(0, 3).map((uri) => (
+              <Image
+                key={uri}
+                source={{ uri }}
+                style={styles.thumb}
+                accessibilityLabel={`Training photo of ${t.name}`}
+              />
+            ))}
+            <Text style={styles.flex}>
+              {t.name} · {t.photoUris.length} reference photo(s)
+            </Text>
+            <UIButton
+              title="Remove"
+              variant="danger"
+              onPress={() => void deleteTrainedObject(t.name)}
+            />
+          </View>
+        ))}
+        {trained.length === 0 ? (
+          <Text style={styles.sub}>
+            No trained objects yet. Trained objects are also added to the
+            track list above.
+          </Text>
+        ) : null}
+      </Section>
+
+      <Section
+        title="Just listen (no camera)"
         hint="Voice notes keep their audio; ambient samples become text memories and the audio is deleted."
       >
         <View style={styles.row}>
@@ -1002,6 +1367,20 @@ export default function MemoryScreen() {
           <Text style={styles.answer}>{montageStatus}</Text>
         ) : null}
         {montageUri ? <VideoPlayer uri={montageUri} /> : null}
+        {slideshow && slideshow.length > 0 ? (
+          <>
+            <Image
+              source={{ uri: slideshow[slideshowIndex % slideshow.length] }}
+              style={styles.slideshowImage}
+              accessibilityLabel="Slideshow of your kept photos"
+            />
+            <UIButton
+              title="Stop slideshow"
+              variant="secondary"
+              onPress={() => setSlideshow(null)}
+            />
+          </>
+        ) : null}
       </Section>
 
       <Section
@@ -1070,6 +1449,16 @@ export default function MemoryScreen() {
                       ? 'photo kept'
                       : 'text memory — photo deleted'}
               </Text>
+              {item.audioUri ? (
+                <Pressable
+                  style={styles.deletePhoto}
+                  onPress={() => playVoiceNote(item.audioUri as string)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Play voice note: ${item.caption}`}
+                >
+                  <Text style={styles.playText}>▶ Play voice note</Text>
+                </Pressable>
+              ) : null}
               {item.photoUri ? (
                 <Pressable
                   style={styles.deletePhoto}
@@ -1100,8 +1489,9 @@ export default function MemoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
+const createStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+  safe: { flex: 1, backgroundColor: t.bg },
   keyboard: { flex: 1 },
   container: {
     padding: 16,
@@ -1110,77 +1500,83 @@ const styles = StyleSheet.create({
     maxWidth: 720,
     alignSelf: 'center',
   },
-  heading: { fontSize: 22, fontWeight: '700' },
-  status: { color: '#555' },
-  sub: { color: '#5f6368' },
-  alert: { backgroundColor: '#ffe9e9', borderRadius: 8, padding: 10 },
-  alertText: { color: '#8a1010', fontWeight: '600' },
+  heading: { fontSize: 28, fontWeight: '800', color: t.text, letterSpacing: 0.2 },
+  heroSub: { color: t.textSub, fontSize: 16, lineHeight: 22 },
+  status: { color: t.textMuted, fontSize: 14, lineHeight: 20 },
+  sub: { color: t.textSub },
+  alert: { backgroundColor: t.dangerBg, borderRadius: 8, padding: 10 },
+  alertText: { color: t.dangerText, fontWeight: '600' },
   camera: { height: 240, borderRadius: 12, overflow: 'hidden' },
   cameraPlaceholder: {
     height: 160,
     borderRadius: 12,
-    backgroundColor: '#eef1f6',
+    backgroundColor: t.surfaceSoft,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     padding: 12,
   },
-  placeholderText: { color: '#445', textAlign: 'center' },
-  label: { fontWeight: '700', marginTop: 6 },
-  fieldLabel: { fontWeight: '600', fontSize: 14 },
+  placeholderText: { color: t.textMuted, textAlign: 'center' },
+  label: { fontWeight: '700', marginTop: 6, color: t.text, fontSize: 15 },
+  fieldLabel: { fontWeight: '700', fontSize: 15, color: t.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
-    backgroundColor: '#eef3ff',
+    backgroundColor: t.accentSoft,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    minHeight: 40,
+    minHeight: 48,
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  chipActive: { backgroundColor: '#0a6cff' },
-  chipTextActive: { color: '#fff', fontWeight: '700' },
+  chipActive: { backgroundColor: t.accent },
+  chipText: { color: t.text, fontWeight: '600', fontSize: 15 },
+  chipTextActive: { color: t.onAccent, fontWeight: '800' },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   flex: { flex: 1 },
   input: {
+    color: t.text,
+    fontSize: 16,
     borderWidth: 1,
-    borderColor: '#ccc',
+    borderColor: t.borderStrong,
     borderRadius: 8,
     padding: 10,
-    backgroundColor: '#fff',
+    backgroundColor: t.card,
   },
-  answer: { backgroundColor: '#f2f7ff', borderRadius: 8, padding: 10 },
+  answer: { backgroundColor: t.infoBg, borderRadius: 12, padding: 12, color: t.text, fontSize: 15, lineHeight: 21 },
   checklist: {
-    backgroundColor: '#f6faf3',
+    backgroundColor: t.successBg,
     borderWidth: 1,
-    borderColor: '#d8e8cf',
+    borderColor: t.successBorder,
     borderRadius: 10,
     padding: 10,
     gap: 2,
   },
-  checklistTitle: { fontWeight: '700' },
-  progressState: { fontWeight: '700' },
+  checklistTitle: { fontWeight: '800', color: t.text, fontSize: 16 },
+  progressState: { fontWeight: '800', color: t.accentText },
   exportBox: {
-    backgroundColor: '#fafafa',
+    backgroundColor: t.surfaceAlt,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: t.border,
     borderRadius: 8,
     padding: 10,
     maxHeight: 240,
   },
   deletePhoto: { marginTop: 6, alignSelf: 'flex-start' },
-  deletePhotoText: { color: '#c62828', fontSize: 12, fontWeight: '600' },
+  deletePhotoText: { color: t.danger, fontSize: 12, fontWeight: '600' },
+  playText: { color: t.accentText, fontSize: 14, fontWeight: '700' },
+  slideshowImage: { width: '100%', height: 260, borderRadius: 16 },
   event: {
     flexDirection: 'row',
     gap: 10,
-    backgroundColor: '#fff',
+    backgroundColor: t.card,
     borderWidth: 1,
-    borderColor: '#e3e3e3',
+    borderColor: t.border,
     borderRadius: 10,
     padding: 10,
     marginBottom: 8,
   },
   thumb: { width: 56, height: 56, borderRadius: 8 },
-  caption: { fontWeight: '600' },
-  meta: { color: '#5f6368', fontSize: 12, marginTop: 2 },
+  caption: { fontWeight: '700', color: t.text, fontSize: 15 },
+  meta: { color: t.textSub, fontSize: 12, marginTop: 2 },
 });

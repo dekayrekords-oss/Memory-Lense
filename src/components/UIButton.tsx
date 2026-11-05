@@ -1,8 +1,9 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { useTheme, useThemedStyles, type ThemeTokens } from './theme';
 
-// One button for the whole app: consistent look on iOS and Android,
-// a real disabled state, and a spinner for async work so nothing is
-// double-tappable while it runs.
+// One big friendly button for the whole app: 56pt tall so a child (or
+// anyone with shaky hands) can't miss it, a real disabled state, and a
+// spinner for async work so nothing is double-tappable while it runs.
 
 export type ButtonVariant = 'primary' | 'danger' | 'secondary';
 
@@ -23,14 +24,17 @@ export default function UIButton({
   loading = false,
   accessibilityLabel,
 }: UIButtonProps) {
+  const theme = useTheme();
+  const styles = useThemedStyles(createStyles);
   const inactive = disabled || loading;
   return (
     <Pressable
-      style={[
+      style={({ pressed }) => [
         styles.button,
         variant === 'danger' && styles.danger,
         variant === 'secondary' && styles.secondary,
         inactive && styles.inactive,
+        pressed && !inactive && styles.pressed,
       ]}
       onPress={onPress}
       disabled={inactive}
@@ -40,7 +44,7 @@ export default function UIButton({
     >
       {loading ? (
         <ActivityIndicator
-          color={variant === 'secondary' ? '#0a6cff' : '#fff'}
+          color={variant === 'secondary' ? theme.accent : theme.onAccent}
         />
       ) : (
         <Text
@@ -56,22 +60,24 @@ export default function UIButton({
   );
 }
 
-const styles = StyleSheet.create({
-  button: {
-    backgroundColor: '#0a6cff',
-    borderRadius: 10,
-    minHeight: 48,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  danger: { backgroundColor: '#c62828' },
-  secondary: {
-    backgroundColor: '#eef3ff',
-    borderWidth: 1,
-    borderColor: '#c9d8f5',
-  },
-  inactive: { opacity: 0.55 },
-  text: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  secondaryText: { color: '#0a3fa8' },
-});
+const createStyles = (t: ThemeTokens) =>
+  StyleSheet.create({
+    button: {
+      backgroundColor: t.accent,
+      borderRadius: 16,
+      minHeight: 56,
+      paddingHorizontal: 20,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    danger: { backgroundColor: t.danger },
+    secondary: {
+      backgroundColor: t.accentSoft,
+      borderWidth: 1,
+      borderColor: t.borderStrong,
+    },
+    inactive: { opacity: 0.55 },
+    pressed: { opacity: 0.85, transform: [{ scale: 0.99 }] },
+    text: { color: t.onAccent, fontWeight: '800', fontSize: 17 },
+    secondaryText: { color: t.accentText },
+  });

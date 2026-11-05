@@ -70,7 +70,8 @@
       "expo-asset",
       "expo-audio",
       "expo-video",
-      "./plugins/withMetaDat.js"
+      "./plugins/withMetaDat.js",
+      "expo-secure-store"
     ],
     "extra": {
       "metaDat": {

@@ -202,3 +202,62 @@ describe('scenarioTrackedNames', () => {
     );
   });
 });
+
+describe('bug-hunt regressions: fuzzy names, when, checklist window', () => {
+  const ev = (id: number, ts: number, name: string, tags: string[] = []) => ({
+    id,
+    ts,
+    kind: 'scene' as const,
+    caption: '',
+    objects: [{ name, place: null, confidence: 0.9 }],
+    tags,
+    photoUri: null,
+  });
+
+  it('finds "screw" when the memory says "Screw A"', () => {
+    const now = Date.now();
+    const text = answerWhere([ev(1, now, 'Screw A')], 'screw');
+    expect(text).toContain('today');
+    expect(text).not.toContain("haven't seen");
+  });
+
+  it('says yesterday / the date for older sightings', () => {
+    const now = Date.now();
+    const text = answerWhere([ev(1, now - 26 * 3600_000, 'keys')], 'keys', undefined, now);
+    expect(text).toContain('yesterday');
+  });
+
+  it('does not count a week-old sighting as packed at exit', () => {
+    const now = Date.now();
+    const kit = {
+      id: 'kit-1',
+      kind: 'checklist' as const,
+      title: 'Gig kit',
+      items: ['guitar'],
+      label: 'Gig kit',
+    };
+    const events = [
+      ev(1, now - 7 * 24 * 3600_000, 'guitar'),
+      { ...ev(2, now, ''), objects: [], tags: ['exit', 'front-door'] },
+    ];
+    const alerts = evaluateScenarios(events, [kit], now);
+    expect(alerts.some((a) => a.message.includes('guitar'))).toBe(true);
+  });
+
+  it('counts a sighting one hour before leaving as packed', () => {
+    const now = Date.now();
+    const kit = {
+      id: 'kit-1',
+      kind: 'checklist' as const,
+      title: 'Gig kit',
+      items: ['guitar'],
+      label: 'Gig kit',
+    };
+    const events = [
+      ev(1, now - 3600_000, 'guitar'),
+      { ...ev(2, now, ''), objects: [], tags: ['exit', 'front-door'] },
+    ];
+    const alerts = evaluateScenarios(events, [kit], now);
+    expect(alerts.some((a) => a.message.includes('guitar'))).toBe(false);
+  });
+});

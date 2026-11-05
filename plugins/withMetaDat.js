@@ -51,14 +51,67 @@ const withMetaDat = (config) => {
   });
 
   config = withAndroidManifest(config, (c) => {
+    // DAT finds the glasses over BLE itself (BluetoothDeviceDetection).
+    // Without granted BLUETOOTH_SCAN/CONNECT runtime permissions the
+    // provider never starts and createSession fails NO_ELIGIBLE_DEVICE
+    // even with the glasses registered and connected in the Meta AI app.
+    // neverForLocation: we scan only for the paired glasses, never to
+    // derive location. Legacy BLUETOOTH maxSdkVersion=30 for API <= 30.
+    const BT_PERMISSIONS = [
+      {
+        $: {
+          'android:name': 'android.permission.BLUETOOTH_SCAN',
+          'android:usesPermissionFlags': 'neverForLocation',
+        },
+      },
+      { $: { 'android:name': 'android.permission.BLUETOOTH_CONNECT' } },
+      {
+        $: {
+          'android:name': 'android.permission.BLUETOOTH',
+          'android:maxSdkVersion': '30',
+        },
+      },
+      {
+        $: {
+          'android:name': 'android.permission.BLUETOOTH_ADMIN',
+          'android:maxSdkVersion': '30',
+        },
+      },
+    ];
+    const manifest = c.modResults.manifest;
+    const kept = (manifest['uses-permission'] ?? []).filter(
+      (entry) =>
+        !BT_PERMISSIONS.some(
+          (p) => p.$['android:name'] === entry.$?.['android:name'],
+        ),
+    );
+    manifest['uses-permission'] = [...kept, ...BT_PERMISSIONS];
+
     const app = c.modResults.manifest.application?.[0];
     if (app) {
+      const MANAGED = new Set([
+        'com.meta.wearable.mwdat.APPLICATION_ID',
+        'com.meta.wearable.mwdat.CLIENT_TOKEN',
+        'com.meta.wearable.mwdat.ANALYTICS_OPT_OUT',
+      ]);
+      const existing = (app['meta-data'] ?? []).filter(
+        (entry) => !MANAGED.has(entry.$?.['android:name']),
+      );
       app['meta-data'] = [
-        ...(app['meta-data'] ?? []),
+        ...existing,
         {
+          // Meta's Developer Mode convention: '0' (not empty) marks
+          // "no production app" so SDK attestation stays in dev mode
+          // instead of failing TOKEN_NOT_CONFIGURED.
           $: {
             'android:name': 'com.meta.wearable.mwdat.APPLICATION_ID',
-            'android:value': meta.appId,
+            'android:value': meta.appId || '0',
+          },
+        },
+        {
+          $: {
+            'android:name': 'com.meta.wearable.mwdat.CLIENT_TOKEN',
+            'android:value': meta.clientToken || '0',
           },
         },
         {

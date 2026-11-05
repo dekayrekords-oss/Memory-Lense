@@ -51,6 +51,20 @@ public class MetaDatModule: Module {
       }
     }
 
+    AsyncFunction("requestPermission") { (kind: String) -> String in
+      let permission: Permission = kind == "microphone" ? .microphone : .camera
+      // VERIFY-IN-XCODE: iOS DAT surfaces the consent through the
+      // registration flow; requestPermission presents it when a view
+      // controller is available upstream. Until that is wired, report
+      // the current status so JS can guide the user instead of hanging.
+      let status = try await Wearables.shared.checkPermissionStatus(permission)
+      switch status {
+      case .granted: return "granted"
+      case .denied: return "denied"
+      default: return "undetermined"
+      }
+    }
+
     AsyncFunction("listDevices") { () -> [[String: Any]] in
       // devicesStream() is an async sequence; take the first snapshot.
       for await devices in Wearables.shared.devicesStream() {

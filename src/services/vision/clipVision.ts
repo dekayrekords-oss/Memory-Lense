@@ -1,3 +1,4 @@
+import { backendAuthHeaders } from '../config';
 import type { VisionResult } from '../types';
 import { parseVisionResult } from './visionParse';
 
@@ -56,7 +57,7 @@ export class HttpClipVision {
     };
     const response = await fetch(`${this.base}/analyze-clip`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...backendAuthHeaders() },
       body: JSON.stringify(body),
     });
     if (!response.ok) {

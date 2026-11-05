@@ -25,6 +25,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.HOST ?? '127.0.0.1';
+const ACCESS_TOKEN = process.env.MEMORY_LENS_TOKEN ?? '';
 const API_KEY = process.env.VISION_API_KEY ?? '';
 const API_URL =
   process.env.VISION_API_URL ?? 'https://api.openai.com/v1/chat/completions';
@@ -597,6 +599,12 @@ const server = createServer((req, res) => {
     sendJson(res, 404, { error: 'not found' });
     return;
   }
+  if (ACCESS_TOKEN && req.headers['x-memory-lens-token'] !== ACCESS_TOKEN) {
+    sendJson(res, 401, {
+      error: 'missing or wrong x-memory-lens-token header',
+    });
+    return;
+  }
   if (!API_KEY && !KEYLESS_ROUTES.has(req.url)) {
     sendJson(res, 503, {
       error: 'VISION_API_KEY is not set. Run: VISION_API_KEY=sk-... npm run server',
@@ -735,8 +743,13 @@ const server = createServer((req, res) => {
   req.on('error', () => sendJson(res, 400, { error: 'could not read body' }));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(
-    `Memory Lens vision server on http://localhost:${PORT} (model: ${MODEL}, key: ${API_KEY ? 'set' : 'MISSING'})`,
+    `Memory Lens vision server on http://${HOST}:${PORT} (model: ${MODEL}, key: ${API_KEY ? 'set' : 'MISSING'})`,
   );
+  if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !ACCESS_TOKEN) {
+    console.warn(
+      'WARNING: exposed to the network with no MEMORY_LENS_TOKEN — anyone on this Wi-Fi can use your API key and submit media. Set MEMORY_LENS_TOKEN and the matching token in the app environment.',
+    );
+  }
 });

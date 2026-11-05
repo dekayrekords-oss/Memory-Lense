@@ -31,12 +31,25 @@ export function createSession(plan: ProjectPlan): ProjectSessionState {
  * (finishing the last step sets status 'done'); 'mistake' and 'unclear'
  * stay on the step. Every verdict is recorded in lastCheck.
  */
+export const MIN_COMPLETE_CONFIDENCE = 0.5;
+
 export function applyCheck(
   state: ProjectSessionState,
   check: StepCheck,
 ): ProjectSessionState {
   if (state.status === 'done') {
     return { ...state, completed: [...state.completed], lastCheck: check };
+  }
+  if (check.verdict === 'complete' && check.confidence < MIN_COMPLETE_CONFIDENCE) {
+    // A guess is not proof: a low-confidence "complete" becomes "unclear"
+    // so a child is never told a possibly-wrong step is done.
+    const downgraded: StepCheck = {
+      verdict: 'unclear',
+      confidence: check.confidence,
+      detail:
+        'The checker was not sure enough to call this done. Take a clearer, closer photo and try again.',
+    };
+    return { ...state, completed: [...state.completed], lastCheck: downgraded };
   }
   if (check.verdict !== 'complete') {
     return { ...state, completed: [...state.completed], lastCheck: check };
@@ -55,13 +68,37 @@ export function applyCheck(
 }
 
 /**
+ * What the app says out loud after a checker verdict. A wearer mid-build
+ * (glasses on, hands busy) cannot read the banner, so the verdict becomes
+ * one short spoken line. Pure so the wording is unit-tested.
+ */
+export function spokenFeedback(
+  check: StepCheck,
+  nextStepTitle: string | null,
+): string {
+  if (check.verdict === 'complete') {
+    return nextStepTitle
+      ? `Step done. Next: ${nextStepTitle}`
+      : 'All steps complete. Nice work!';
+  }
+  if (check.verdict === 'mistake') {
+    const detail = check.detail.trim();
+    return detail
+      ? `Careful. ${detail}`
+      : 'Careful. Something looks wrong on this step.';
+  }
+  const detail = check.detail.trim();
+  return detail || 'I cannot see this step clearly. Hold it up closer.';
+}
+
+/**
  * Synthetic verdict for the manual "Next step" button. Manual advance goes
  * through applyCheck with this check so session state stays the single
  * source of truth — never bump currentStep directly.
  */
 export const MANUAL_STEP_CHECK: StepCheck = {
   verdict: 'complete',
-  detail: 'Manually marked complete.',
+  detail: 'Marked done by you — no photo check was done.',
   confidence: 1,
 };
 
